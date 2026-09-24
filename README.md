@@ -47,7 +47,10 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
 | **Action** | `refresh_token` — `{}` → `{ "expires_in", "secret_update" }` (the core stores the new token) |
 
 `auto_reply` returns `records` only for replies it actually sent; a dry run returns `would_send`
-instead so nothing gets logged. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
+instead so nothing gets logged. A record is
+`{ comment_id, media_id, username, user_id, commenter, keyword, reply, text, sent_at }` — Meta withholds
+`username` for commenters with no role on the app, so `commenter` falls back to the user id and then the
+comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
 ## Develop
