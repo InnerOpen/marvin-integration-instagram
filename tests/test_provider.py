@@ -1,0 +1,156 @@
+"""Tests for the Instagram provider — Graph calls through a stub http helper."""
+
+import json
+import logging
+from datetime import UTC, datetime
+
+import pytest
+from marvin_integration_sdk import IntegrationContext, Response
+
+from marvin_integration_instagram import InstagramProvider
+
+_LOG = logging.getLogger("test")
+BASE = "https://graph.instagram.com/v22.0"
+
+
+def _ts(days_ago=0):
+    dt = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    dt = dt.replace(day=dt.day - days_ago)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+MEDIA = {"data": [{"id": "m1", "timestamp": _ts()}, {"id": "m2", "timestamp": _ts(1)}]}
+COMMENTS = {
+    "m1": {"data": [{"id": "c1", "text": "What SIZE is this?", "username": "fan", "timestamp": _ts()}]},
+    "m2": {
+        "data": [
+            {"id": "c2", "text": "love it", "username": "other", "timestamp": _ts()},
+            {"id": "c3", "text": "size?", "username": "me", "timestamp": _ts()},
+        ]
+    },
+}
+
+
+class _StubHttp:
+    """GETs are answered by URL substring; POSTs are recorded and answered with `post_status`."""
+
+    def __init__(self, routes=None, post_status=200, get_status=200):
+        self.routes = routes or {}
+        self.post_status = post_status
+        self.get_status = get_status
+        self.gets: list[dict] = []
+        self.posts: list[dict] = []
+
+    def get(self, url, *, headers=None, timeout=15):
+        self.gets.append({"url": url, "headers": headers})
+        for needle, payload in self.routes.items():
+            if needle in url:
+                return Response(status_code=self.get_status, content=json.dumps(payload).encode())
+        return Response(status_code=404, content=b'{"error":"no route"}')
+
+    def post(self, url, *, json=None, data=None, headers=None, timeout=15):
+        self.posts.append({"url": url, "json": json, "headers": headers})
+        return Response(status_code=self.post_status, content=b'{"recipient_id":"x","message_id":"y"}')
+
+
+def _graph_http(**kw):
+    return _StubHttp(
+        routes={"/me/media": MEDIA, "/m1/comments": COMMENTS["m1"], "/m2/comments": COMMENTS["m2"], "/me?": {"user_id": "1", "username": "me"}}, **kw
+    )
+
+
+def _ctx(secret="tok", http=None, **config):
+    cfg = {"ig_user_id": "1789", **config}
+    return IntegrationContext(config=cfg, secret=secret, logger=_LOG, http=http or _graph_http())
+
+
+RULES = [{"post_id": "*", "keywords": "size, sizing", "reply": "Sizes S–XL, DM us for a chart."}]
+
+
+def test_check_ok_error_and_unconfigured():
+    p = InstagramProvider()
+    assert p.check(_ctx()) == ("ok", None)
+    assert p.check(_ctx(http=_graph_http(get_status=400)))[0] == "error"
+    assert p.check(_ctx(secret=None))[0] == "unconfigured"
+    assert p.check(IntegrationContext(config={}, secret="tok", logger=_LOG, http=_graph_http()))[0] == "unconfigured"
+
+
+def test_missing_secret_raises_and_unknown_action_raises():
+    p = InstagramProvider()
+    with pytest.raises(ValueError):
+        p.run_action("list_recent_comments", {}, _ctx(secret=None))
+    with pytest.raises(NotImplementedError):
+        p.run_action("nope", {}, _ctx())
+
+
+def test_list_recent_comments_walks_media_and_normalizes():
+    http = _graph_http()
+    out = InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http))
+    assert [c["comment_id"] for c in out["comments"]] == ["c1", "c2", "c3"]
+    assert out["comments"][0]["media_id"] == "m1"
+    assert out["comments"][0]["timestamp"].startswith("2026-09-24")
+    assert all(g["headers"] == {"Authorization": "Bearer tok"} for g in http.gets)
+    assert http.gets[0]["url"].startswith(f"{BASE}/me/media?")
+
+
+def test_lookback_media_string_is_cast():
+    http = _graph_http()
+    InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http, lookback_media="3"))
+    assert "limit=3" in http.gets[0]["url"]
+    http = _graph_http()
+    InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http, lookback_media="bogus"))
+    assert "limit=10" in http.gets[0]["url"]
+
+
+def test_get_failure_raises_value_error():
+    with pytest.raises(ValueError, match="HTTP 500"):
+        InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=_graph_http(get_status=500)))
+
+
+def test_auto_reply_dry_run_posts_nothing_and_returns_no_records():
+    http = _graph_http()
+    out = InstagramProvider().run_action("auto_reply", {"rules": RULES}, _ctx(http=http, own_username="me"))
+    assert http.posts == []
+    assert out["dry_run"] is True
+    assert out["records"] == []
+    assert out["checked"] == 3 and out["matched"] == 1 and out["sent"] == 0
+    assert [w["comment_id"] for w in out["would_send"]] == ["c1"]
+    assert out["would_send"][0]["keyword"] == "size"
+    assert {s["comment_id"]: s["reason"] for s in out["skipped"]} == {"c2": "no_match", "c3": "own_comment"}
+
+
+def test_auto_reply_real_run_sends_and_returns_records():
+    http = _graph_http()
+    out = InstagramProvider().run_action("auto_reply", {"rules": RULES, "dry_run": False, "skip_comment_ids": ["c3"]}, _ctx(http=http))
+    assert len(http.posts) == 1
+    post = http.posts[0]
+    assert post["url"] == f"{BASE}/1789/messages"
+    assert post["json"] == {"recipient": {"comment_id": "c1"}, "message": {"text": RULES[0]["reply"]}}
+    assert post["headers"] == {"Authorization": "Bearer tok"}
+    assert out["sent"] == 1 and "would_send" not in out
+    rec = out["records"][0]
+    assert rec["comment_id"] == "c1" and rec["username"] == "fan" and rec["keyword"] == "size" and rec["sent_at"]
+    assert {"comment_id": "c3", "reason": "already_replied"} in out["skipped"]
+
+
+def test_auto_reply_send_failure_is_skipped_not_raised():
+    http = _graph_http(post_status=400)
+    out = InstagramProvider().run_action("auto_reply", {"rules": RULES, "dry_run": False}, _ctx(http=http))
+    assert out["sent"] == 0 and out["records"] == []
+    assert {"comment_id": "c1", "reason": "send_failed: HTTP 400"} in out["skipped"]
+
+
+def test_send_private_reply_posts_once():
+    http = _graph_http()
+    out = InstagramProvider().run_action("send_private_reply", {"comment_id": "c1", "text": "hi"}, _ctx(http=http))
+    assert out["sent"] is True and out["status"] == 200
+    assert http.posts[0]["json"]["recipient"] == {"comment_id": "c1"}
+    with pytest.raises(ValueError):
+        InstagramProvider().run_action("send_private_reply", {"comment_id": "c1"}, _ctx())
+
+
+def test_refresh_token_returns_secret_update():
+    http = _StubHttp(routes={"refresh_access_token": {"access_token": "new-tok", "token_type": "bearer", "expires_in": 5183944}})
+    out = InstagramProvider().run_action("refresh_token", {}, _ctx(http=http))
+    assert out == {"expires_in": 5183944, "secret_update": "new-tok"}
+    assert "grant_type=ig_refresh_token" in http.gets[0]["url"]
