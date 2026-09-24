@@ -21,10 +21,10 @@ def _ts(days_ago=0):
 
 MEDIA = {"data": [{"id": "m1", "timestamp": _ts()}, {"id": "m2", "timestamp": _ts(1)}]}
 COMMENTS = {
-    "m1": {"data": [{"id": "c1", "text": "What SIZE is this?", "username": "fan", "timestamp": _ts()}]},
+    "m1": {"data": [{"id": "c1", "text": "What SIZE is this?", "username": "fan", "from": {"id": "u1", "username": "fan"}, "timestamp": _ts()}]},
     "m2": {
         "data": [
-            {"id": "c2", "text": "love it", "username": "other", "timestamp": _ts()},
+            {"id": "c2", "text": "love it", "from": {"id": "u2"}, "timestamp": _ts()},
             {"id": "c3", "text": "size?", "username": "me", "timestamp": _ts()},
         ]
     },
@@ -88,6 +88,7 @@ def test_list_recent_comments_walks_media_and_normalizes():
     out = InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http))
     assert [c["comment_id"] for c in out["comments"]] == ["c1", "c2", "c3"]
     assert out["comments"][0]["media_id"] == "m1"
+    assert out["comments"][1]["username"] == "" and out["comments"][1]["user_id"] == "u2"  # username withheld, from.id kept
     assert out["comments"][0]["timestamp"].startswith("2026-09-24")
     assert all(g["headers"] == {"Authorization": "Bearer tok"} for g in http.gets)
     assert http.gets[0]["url"].startswith(f"{BASE}/me/media?")
@@ -129,7 +130,8 @@ def test_auto_reply_real_run_sends_and_returns_records():
     assert post["headers"] == {"Authorization": "Bearer tok"}
     assert out["sent"] == 1 and "would_send" not in out
     rec = out["records"][0]
-    assert rec["comment_id"] == "c1" and rec["username"] == "fan" and rec["keyword"] == "size" and rec["sent_at"]
+    assert rec["comment_id"] == "c1" and rec["username"] == "fan" and rec["user_id"] == "u1" and rec["keyword"] == "size" and rec["sent_at"]
+    assert rec["commenter"] == "@fan"
     assert {"comment_id": "c3", "reason": "already_replied"} in out["skipped"]
 
 
@@ -154,3 +156,11 @@ def test_refresh_token_returns_secret_update():
     out = InstagramProvider().run_action("refresh_token", {}, _ctx(http=http))
     assert out == {"expires_in": 5183944, "secret_update": "new-tok"}
     assert "grant_type=ig_refresh_token" in http.gets[0]["url"]
+
+
+def test_record_commenter_falls_back_to_user_id_then_comment_id():
+    from marvin_integration_instagram.provider import _record
+
+    base = {"comment_id": "c9", "media_id": "m", "keyword": "k", "reply": "r", "text": "t"}
+    assert _record({**base, "username": "", "user_id": "u9"})["commenter"] == "user u9"
+    assert _record({**base, "username": "", "user_id": ""})["commenter"] == "comment c9"

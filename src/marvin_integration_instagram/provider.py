@@ -30,7 +30,7 @@ DEFAULT_API_VERSION = "v22.0"
 DEFAULT_LOOKBACK_MEDIA = 10
 DEFAULT_MAX_AGE_DAYS = 7
 COMMENTS_PAGE_SIZE = 50
-COMMENT_FIELDS = "id,text,username,timestamp"
+COMMENT_FIELDS = "id,text,username,timestamp,from"
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -44,6 +44,23 @@ def _parse_ts(value: str | None) -> datetime | None:
             return datetime.fromisoformat(value)
         except ValueError:
             return None
+
+
+def _record(match: dict) -> dict:
+    """The persisted shape of one match. `commenter` is the best available handle: the username
+    when Meta gives it, otherwise the user id, otherwise the comment id."""
+    username, user_id = match.get("username") or "", match.get("user_id") or ""
+    commenter = f"@{username}" if username else (f"user {user_id}" if user_id else f"comment {match['comment_id']}")
+    return {
+        "comment_id": match["comment_id"],
+        "media_id": match["media_id"],
+        "username": username,
+        "user_id": user_id,
+        "commenter": commenter,
+        "keyword": match["keyword"],
+        "reply": match["reply"],
+        "text": match["text"],
+    }
 
 
 @register_provider
@@ -160,11 +177,13 @@ class InstagramProvider(IntegrationProvider):
 
     def _list_comments(self, ctx: IntegrationContext, media_id: str) -> list[dict]:
         url = f"{self._base(ctx)}/{media_id}/comments?fields={COMMENT_FIELDS}&limit={COMMENTS_PAGE_SIZE}"
+        # Meta withholds `username` for commenters without a role on the app; `from.id` usually survives.
         return [
             {
                 "comment_id": str(c.get("id")),
                 "media_id": str(media_id),
                 "username": c.get("username") or "",
+                "user_id": str((c.get("from") or {}).get("id") or ""),
                 "text": c.get("text") or "",
                 "timestamp": _parse_ts(c.get("timestamp")),
             }
@@ -242,7 +261,7 @@ class InstagramProvider(IntegrationProvider):
         if dry_run:
             # Nothing persisted on a dry run: `records` stays empty so the core never logs a reply
             # that was not actually sent (a logged comment id blocks a real send later).
-            result["would_send"] = [{k: m[k] for k in ("comment_id", "media_id", "username", "keyword", "reply", "text")} for m in matches]
+            result["would_send"] = [_record(m) for m in matches]
             return result
 
         for m in matches:
@@ -253,17 +272,7 @@ class InstagramProvider(IntegrationProvider):
                 skipped.append({"comment_id": m["comment_id"], "reason": f"send_failed: HTTP {resp.status_code}"})
                 continue
             result["sent"] += 1
-            result["records"].append(
-                {
-                    "comment_id": m["comment_id"],
-                    "media_id": m["media_id"],
-                    "username": m["username"],
-                    "keyword": m["keyword"],
-                    "reply": m["reply"],
-                    "text": m["text"],
-                    "sent_at": datetime.now(UTC).isoformat(),
-                }
-            )
+            result["records"].append({**_record(m), "sent_at": datetime.now(UTC).isoformat()})
         return result
 
     def _action_refresh_token(self, args: dict, ctx: IntegrationContext) -> dict:
