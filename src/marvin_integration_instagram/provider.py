@@ -70,6 +70,7 @@ class InstagramProvider(IntegrationProvider):
     name = "Instagram"
     description = "Poll comments on your recent posts and send keyword-triggered private replies (DMs)."
     category = CATEGORY_DESTINATION
+    icon = "📸"
 
     content = CONTENT
     """Entry types, collections and tasks this integration needs — offered for review on install."""
