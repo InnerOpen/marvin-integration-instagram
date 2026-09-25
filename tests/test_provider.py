@@ -204,3 +204,12 @@ def test_the_log_type_carries_the_dedupe_field_the_task_reads():
     assert "comment_id" in fields
     auto = next(c for c in InstagramProvider().content if c.slug == "instagram-auto-reply")
     assert auto.payload["task_config"]["inputs"]["skip_comment_ids"]["field"] == "comment_id"
+
+
+def test_only_what_the_actions_actually_use_is_marked_required():
+    """Calling a preference a requirement tells someone their integration is broken when it is not.
+    The entry types and the task are load-bearing; the collections and token refresh are not."""
+    content = {c.slug: c for c in InstagramProvider().content}
+    assert {s for s, c in content.items() if c.required} == {"ig-auto-reply", "ig-reply-log", "instagram-auto-reply"}
+    assert not content["social-sent"].required
+    assert not content["instagram-token-refresh"].required

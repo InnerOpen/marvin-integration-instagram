@@ -7,6 +7,10 @@ them here and the workspace applies them after review.
 
 The names are this integration's own, which is why hardcoding them is fair: an Instagram reply log
 is Instagram's business. Nothing here touches the workspace's own content model.
+
+Required vs suggested: the two entry types and the auto-reply task are marked required — the action
+reads rules from one, writes a log to the other, and the task is what runs it. The two collections
+are organisation, and token refresh is maintenance: useful, but the workspace's call.
 """
 
 from marvin_integration_sdk import ContentBlueprint
@@ -48,6 +52,7 @@ CONTENT = (
         kind="entry_type",
         slug=RULES_TYPE,
         name="IG Auto-Reply Rule",
+        required=True,
         description="A keyword and the DM it should trigger. Only published rules fire; drafts are inert.",
         payload={
             "name": "IG Auto-Reply Rule",
@@ -68,6 +73,7 @@ CONTENT = (
         kind="entry_type",
         slug=LOG_TYPE,
         name="IG Reply Log",
+        required=True,
         description="One entry per DM sent. Its comment_id is what stops a comment being answered twice.",
         payload={
             "name": "IG Reply Log",
@@ -128,6 +134,7 @@ CONTENT = (
         kind="scheduled_task",
         slug=AUTO_REPLY_TASK,
         name="Instagram auto-reply",
+        required=True,
         description="Polls comments every 2 minutes and sends matching replies. Starts disabled, in dry-run.",
         requires=(f"entry_type:{RULES_TYPE}", f"entry_type:{LOG_TYPE}"),
         payload={
