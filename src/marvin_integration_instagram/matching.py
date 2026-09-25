@@ -42,7 +42,13 @@ def keyword_hit(text: str, keywords: list[str]) -> str | None:
 
 
 def _rules_for(media_id: str, rules: list[dict]) -> list[dict]:
-    # Post-specific rules take precedence over the "*" catch-all; order within each group is kept.
+    """Rules to try for one post, in the order they should be tried.
+
+    Post-specific rules beat the "*" catch-all; within each group the caller's order is kept. Meta
+    allows exactly one private reply per comment, so when a comment matches several rules only the
+    first can fire — which makes the caller's ordering load-bearing. Marvin hands them over
+    oldest-first, so the rule you wrote first wins.
+    """
     specific = [r for r in rules if r["post_id"] == media_id]
     catch_all = [r for r in rules if r["post_id"] == ALL_POSTS]
     return specific + catch_all
@@ -61,6 +67,10 @@ def match_rules(
 
     Returns ``(matches, skipped)``: a match is the comment plus ``keyword`` and ``reply``; a skip is
     ``{comment_id, reason}`` with one of the ``REASON_*`` values.
+
+    One reply per comment, always: Instagram permits a single private reply per comment, so a
+    comment matching several rules takes the first (post-specific before ``*``, then caller order)
+    and the rest are not considered.
     """
     normalized = [r for r in (normalize_rule(r) for r in rules) if r]
     cutoff = now - timedelta(days=max_age_days)

@@ -76,3 +76,30 @@ def test_match_rules_sends_one_reply_per_comment_first_hit_wins():
 def test_match_rules_reports_no_match():
     _, skipped = match_rules([_comment(text="lovely")], [{"keywords": ["size"], "reply": "r"}], now=NOW)
     assert skipped == [{"comment_id": "c1", "reason": "no_match"}]
+
+
+def test_overlapping_rules_send_exactly_one_reply_the_first_in_order():
+    """Instagram allows one private reply per comment, so rule order decides which fires. Marvin
+    hands rules over oldest-first, making this "the rule you wrote first wins"."""
+    comment = _comment(text="what size, and do you have a link?")
+    rules = [
+        {"keywords": ["size"], "reply": "sizing answer"},
+        {"keywords": ["link"], "reply": "link answer"},
+    ]
+    matches, skipped = match_rules([comment], rules, now=NOW)
+    assert [m["reply"] for m in matches] == ["sizing answer"]
+    assert skipped == []
+
+    # reverse the order and the other one wins — the behaviour is ordering, not luck
+    matches, _ = match_rules([comment], list(reversed(rules)), now=NOW)
+    assert [m["reply"] for m in matches] == ["link answer"]
+
+
+def test_a_post_specific_rule_beats_an_earlier_catch_all():
+    comment = _comment(text="what size?", media_id="m1")
+    rules = [
+        {"post_id": "*", "keywords": ["size"], "reply": "generic"},
+        {"post_id": "m1", "keywords": ["size"], "reply": "this post only"},
+    ]
+    matches, _ = match_rules([comment], rules, now=NOW)
+    assert [m["reply"] for m in matches] == ["this post only"]
