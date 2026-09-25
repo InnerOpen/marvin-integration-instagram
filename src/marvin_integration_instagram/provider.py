@@ -24,6 +24,7 @@ from marvin_integration_sdk import (
     register_provider,
 )
 
+from .content import CONTENT
 from .matching import match_rules
 
 DEFAULT_API_VERSION = "v22.0"
@@ -69,6 +70,9 @@ class InstagramProvider(IntegrationProvider):
     name = "Instagram"
     description = "Poll comments on your recent posts and send keyword-triggered private replies (DMs)."
     category = CATEGORY_DESTINATION
+
+    content = CONTENT
+    """Entry types, collections and tasks this integration needs — offered for review on install."""
 
     credentials = (
         CredentialField(

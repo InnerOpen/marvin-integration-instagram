@@ -27,9 +27,10 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
    **long-lived user token** (60 days). Note the numeric **Instagram user id** of that account.
 2. In Marvin: **Settings → Integrations → Instagram → Configure**, paste the token and fill in the
    user id. Save — the card should turn `ok`.
-3. Seed the rule/log entry types and the scheduled task (`scripts/seed_instagram_auto_reply.py
-   --workspace <slug>` in the Marvin repo), publish a rule, and run the task. It starts **disabled
-   and in dry-run**; flip `args.dry_run` to `false` once the log shows the right `would_send`.
+3. The integration **declares the content it needs** — two entry types, two collections and two
+   scheduled tasks. Marvin offers them for review after install; apply them, then write a rule and
+   publish it. The tasks arrive **disabled and in dry-run**: flip `args.dry_run` to `false` once the
+   execution log shows the right `would_send`, then enable.
 
 > Under Meta **Standard Access** a private reply only reaches accounts that hold a role on your app
 > (admins/testers). Replying to the public needs Advanced Access (App Review + Business
@@ -60,4 +61,5 @@ uv run --extra dev pytest
 ```
 
 The provider depends only on `marvin-integration-sdk` — not on Marvin core — so tests run standalone.
-`matching.py` is pure Python (no SDK import) and holds all the keyword logic.
+`matching.py` is pure Python (no SDK import) and holds all the keyword logic; `content.py` declares
+the workspace content the actions depend on, which the core offers for review rather than creating.

@@ -164,3 +164,43 @@ def test_record_commenter_falls_back_to_user_id_then_comment_id():
     base = {"comment_id": "c9", "media_id": "m", "keyword": "k", "reply": "r", "text": "t"}
     assert _record({**base, "username": "", "user_id": "u9"})["commenter"] == "user u9"
     assert _record({**base, "username": "", "user_id": ""})["commenter"] == "comment c9"
+
+
+def test_provider_declares_the_content_its_actions_depend_on():
+    """auto_reply reads rules from entries and writes a log entry per send, and the task is what
+    calls it — so these are how the integration works, not optional extras."""
+    content = {c.slug: c for c in InstagramProvider().content}
+    assert set(content) == {
+        "ig-auto-reply",
+        "ig-reply-log",
+        "social-auto-responses",
+        "social-sent",
+        "instagram-auto-reply",
+        "instagram-token-refresh",
+    }
+    assert {c.kind for c in content.values()} == {"entry_type", "collection", "scheduled_task"}
+
+
+def test_declared_tasks_start_disabled_and_in_dry_run():
+    # Installing an integration must never start sending DMs on its own.
+    tasks = [c for c in InstagramProvider().content if c.kind == "scheduled_task"]
+    assert tasks and all(t.payload["enabled"] is False for t in tasks)
+    auto = next(t for t in tasks if t.slug == "instagram-auto-reply")
+    assert auto.payload["task_config"]["args"]["dry_run"] is True
+
+
+def test_declared_content_depends_only_on_this_integrations_own_types():
+    # A provider owns its own names; it must not reach into the workspace's content model.
+    own = {c.slug for c in InstagramProvider().content if c.kind == "entry_type"}
+    for blueprint in InstagramProvider().content:
+        for requirement in blueprint.requires:
+            kind, _, slug = requirement.partition(":")
+            assert kind == "entry_type" and slug in own, f"{blueprint.slug} requires foreign content {requirement}"
+
+
+def test_the_log_type_carries_the_dedupe_field_the_task_reads():
+    log = next(c for c in InstagramProvider().content if c.slug == "ig-reply-log")
+    fields = [f["key"] for f in log.payload["schema_json"]["fields"]]
+    assert "comment_id" in fields
+    auto = next(c for c in InstagramProvider().content if c.slug == "instagram-auto-reply")
+    assert auto.payload["task_config"]["inputs"]["skip_comment_ids"]["field"] == "comment_id"
