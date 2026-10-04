@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from marvin_integration_sdk import IntegrationContext, Response
@@ -13,10 +13,13 @@ _LOG = logging.getLogger("test")
 BASE = "https://graph.instagram.com/v22.0"
 
 
+# Relative to the real clock: the provider ages comments against datetime.now(UTC) (default max age
+# 7 days), so a fixed date here would turn every comment "too_old" a week later.
+NOW = datetime.now(UTC).replace(microsecond=0)
+
+
 def _ts(days_ago=0):
-    dt = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
-    dt = dt.replace(day=dt.day - days_ago)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+    return (NOW - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
 MEDIA = {"data": [{"id": "m1", "timestamp": _ts()}, {"id": "m2", "timestamp": _ts(1)}]}
@@ -89,7 +92,7 @@ def test_list_recent_comments_walks_media_and_normalizes():
     assert [c["comment_id"] for c in out["comments"]] == ["c1", "c2", "c3"]
     assert out["comments"][0]["media_id"] == "m1"
     assert out["comments"][1]["username"] == "" and out["comments"][1]["user_id"] == "u2"  # username withheld, from.id kept
-    assert out["comments"][0]["timestamp"].startswith("2026-09-24")
+    assert out["comments"][0]["timestamp"].startswith(NOW.strftime("%Y-%m-%d"))
     assert all(g["headers"] == {"Authorization": "Bearer tok"} for g in http.gets)
     assert http.gets[0]["url"].startswith(f"{BASE}/me/media?")
 
