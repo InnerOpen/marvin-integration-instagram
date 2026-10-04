@@ -54,6 +54,10 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
+## Logo
+
+`logo.png` is the gradient Instagram glyph from Meta's [Instagram brand asset pack](https://www.meta.com/brand/resources/instagram/instagram-brand/), scaled to 192×192 and otherwise unaltered. Meta's guidelines: don't alter it, don't imply partnership or endorsement, and don't make Instagram more prominent than Marvin; keep it at least 29×29 px with clear space around it.
+
 ## Develop
 
 ```bash
