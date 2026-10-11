@@ -54,6 +54,16 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
+## What it teaches Marvin (0.4.0, SDK 0.9.0)
+
+- **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
+  rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so
+  only the scheduled task sends them), and what each failure message means. Marvin's agents read it when building
+  workflows where Instagram is connected, and Marvin's manual search finds it.
+- **No recipes**, on purpose: the reply actions cannot run from a workflow, the only workflow-callable read
+  (`list_recent_comments`) has no way to mark a comment as seen, and the rule/log types, collections and scheduled
+  tasks are already declared as blueprints.
+
 ## Logo
 
 `logo.png` is the gradient Instagram glyph from Meta's [Instagram brand asset pack](https://www.meta.com/brand/resources/instagram/instagram-brand/), scaled to 192×192 and otherwise unaltered. Meta's guidelines: don't alter it, don't imply partnership or endorsement, and don't make Instagram more prominent than Marvin; keep it at least 29×29 px with clear space around it.

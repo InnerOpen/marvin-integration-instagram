@@ -5,7 +5,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from marvin_integration_sdk import IntegrationContext, Response
+from marvin_integration_sdk import IntegrationContext, Response, load_guide
+from marvin_integration_sdk.testing import IntegrationContract
 
 from marvin_integration_instagram import InstagramProvider
 
@@ -216,3 +217,28 @@ def test_only_what_the_actions_actually_use_is_marked_required():
     assert {s for s, c in content.items() if c.required} == {"ig-auto-reply", "ig-reply-log", "instagram-auto-reply"}
     assert not content["social-sent"].required
     assert not content["instagram-token-refresh"].required
+
+
+# ── what Instagram teaches Marvin (SDK 0.9.0) ────────────────────────────────
+
+
+class TestInstagramContract(IntegrationContract):
+    @pytest.fixture
+    def provider(self):
+        return InstagramProvider()
+
+
+def test_the_guide_ships_with_the_package():
+    guide = load_guide(InstagramProvider)
+    assert guide.startswith("# Instagram") and "IG Reply Log" in guide and "cannot run from a workflow" in guide
+
+
+def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
+    # The guide says replies cannot run from a workflow; core refuses any action that requires approval.
+    needs_approval = {a.key for a in InstagramProvider.actions if a.requires_approval}
+    assert needs_approval == {"send_private_reply", "auto_reply"}
+
+
+def test_no_recipes_are_shipped():
+    # Deliberate: the only workflow-callable action is a read, and the rules/log/collections are already blueprints.
+    assert InstagramProvider.recipes == ()

@@ -73,6 +73,10 @@ class InstagramProvider(IntegrationProvider):
     icon = "📸"
     logo = "logo.png"
 
+    # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here. No recipes: the
+    # reply actions need approval and cannot run from a workflow, and the rules, log and collections are already blueprints.
+    guide = "guide.md"
+
     content = CONTENT
     """Entry types, collections and tasks this integration needs — offered for review on install."""
 
