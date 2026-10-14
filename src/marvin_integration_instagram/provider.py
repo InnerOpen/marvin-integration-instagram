@@ -401,7 +401,13 @@ class InstagramProvider(IntegrationProvider):
         return result
 
     def _action_refresh_token(self, args: dict, ctx: IntegrationContext) -> dict:
-        data = self._get_json(ctx, f"{self._base(ctx)}/refresh_access_token?grant_type=ig_refresh_token")
+        # Unlike the Graph calls, Meta's refresh endpoint ignores the Authorization header and wants the token as
+        # a query parameter ("The parameter access_token is required" otherwise).
+        from urllib.parse import quote
+
+        data = self._get_json(
+            ctx, f"{self._base(ctx)}/refresh_access_token?grant_type=ig_refresh_token&access_token={quote(ctx.secret or '', safe='')}"
+        )
         token = data.get("access_token")
         if not token:
             raise ValueError("Instagram did not return a refreshed access token.")

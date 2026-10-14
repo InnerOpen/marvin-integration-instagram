@@ -160,6 +160,7 @@ def test_refresh_token_returns_secret_update():
     out = InstagramProvider().run_action("refresh_token", {}, _ctx(http=http))
     assert out == {"expires_in": 5183944, "secret_update": "new-tok"}
     assert "grant_type=ig_refresh_token" in http.gets[0]["url"]
+    assert "access_token=" in http.gets[0]["url"]  # Meta's refresh endpoint takes the token as a parameter, not the header
 
 
 def test_record_commenter_falls_back_to_user_id_then_comment_id():
