@@ -23,6 +23,7 @@ from marvin_integration_sdk import (
     IntegrationContext,
     IntegrationProvider,
     ProviderAction,
+    WorkflowRecipe,
     register_provider,
 )
 
@@ -80,9 +81,73 @@ class InstagramProvider(IntegrationProvider):
     icon = "📸"
     logo = "logo.png"
 
-    # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here. No recipes: the
-    # reply actions need approval and cannot run from a workflow, and the rules, log and collections are already blueprints.
+    # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here, and one
+    # ready-made workflow in the Workflow Library, offered once Instagram is connected: post the main picture on publish,
+    # after an editor approves. (The reply actions stay with the scheduled task; the rules, log and collections are blueprints.)
     guide = "guide.md"
+    recipes = (
+        WorkflowRecipe(
+            id="post-on-publish",
+            title="Post to Instagram when published",
+            outcome=(
+                "When an entry with a main picture is published, an editor is asked whether to post it; once approved, the picture "
+                "goes to the feed with the summary and your hashtags as the caption, and the post's link is kept on the entry."
+            ),
+            category="Social and community",
+            tags=("instagram", "social", "publishing", "approval"),
+            definition={
+                "trigger": {"type": "event", "event": "entry_published"},
+                "conditions": [
+                    {"field": "entry.entry_type", "op": "eq", "value": "{{entry_type}}"},
+                    {"field": "entry.image", "op": "exists"},
+                ],
+                "actions": [
+                    {
+                        "kind": "approval",
+                        "id": "ok",
+                        "message": "Post “${entry.title}” to Instagram with its main picture? Caption: ${entry.summary} {{hashtags}}",
+                        "approvers": "editor",
+                        "expires_in_hours": 48,
+                    },
+                    {
+                        "kind": "integration",
+                        "id": "post",
+                        "integration": "{{instagram_integration}}",
+                        "action": "publish_media",
+                        "args": {"image_url": "${entry.image}", "caption": "${entry.summary} {{hashtags}}", "dry_run": False},
+                        "when": {"field": "steps.ok.output.decision", "op": "eq", "value": "approved"},
+                    },
+                    {
+                        "kind": "entry",
+                        "op": "set_metadata",
+                        "metadata": {"instagram_media_id": "${steps.post.output.media_id}", "instagram_permalink": "${steps.post.output.permalink}"},
+                        "when": {"field": "steps.post.output.published", "op": "eq", "value": True},
+                    },
+                ],
+            },
+            variables={
+                "entry_type": {
+                    "type": "entry_type_slug",
+                    "description": "Entries of this type are offered to Instagram when published (only those with a main picture).",
+                    "example": "artwork",
+                },
+                "instagram_integration": {
+                    "type": "integration_slug",
+                    "description": "The Instagram connection; its token needs the content-publishing permission.",
+                    "example": "instagram",
+                },
+                "hashtags": {
+                    "type": "text",
+                    "description": "Appended to every caption (hashtags and mentions, as written).",
+                    "example": "#handmade #studio",
+                },
+            },
+            side_effects=(
+                {"kind": "external_post", "description": "One Instagram feed post per approved run (Instagram allows 25 per 24 hours)."},
+                {"kind": "content_mutation", "description": "Sets instagram_media_id and instagram_permalink on the entry."},
+            ),
+        ),
+    )
 
     content = CONTENT
     """Entry types, collections and tasks this integration needs — offered for review on install."""

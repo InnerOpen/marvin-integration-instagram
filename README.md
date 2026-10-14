@@ -55,7 +55,7 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
-## What it teaches Marvin (0.5.0, SDK 0.9.0)
+## What it teaches Marvin (0.5.1, SDK 0.9.0)
 
 - **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
   rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so

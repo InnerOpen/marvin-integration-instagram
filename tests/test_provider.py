@@ -241,6 +241,16 @@ def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
     assert "Approval" in workflows and all(label in workflows for label in ("Publish a post", "Send private reply", "Auto-reply"))
 
 
-def test_no_recipes_are_shipped():
-    # Deliberate: the only workflow-callable action is a read, and the rules/log/collections are already blueprints.
-    assert InstagramProvider.recipes == ()
+def test_the_post_on_publish_recipe_asks_first_then_posts_the_main_picture():
+    (recipe,) = InstagramProvider.recipes
+    ask, post, keep = recipe.definition["actions"]
+    assert ask["kind"] == "approval" and post["when"] == {"field": "steps.ok.output.decision", "op": "eq", "value": "approved"}
+    assert (post["action"], post["integration"], post["args"]["image_url"], post["args"]["dry_run"]) == (
+        "publish_media",
+        "{{instagram_integration}}",
+        "${entry.image}",
+        False,
+    )
+    assert keep["metadata"]["instagram_permalink"] == "${steps.post.output.permalink}" and keep["when"]["field"] == "steps.post.output.published"
+    assert {"field": "entry.image", "op": "exists"} in recipe.definition["conditions"]  # no picture, no ask
+    assert set(recipe.variables) == {"entry_type", "instagram_integration", "hashtags"}
