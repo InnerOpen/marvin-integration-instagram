@@ -12,8 +12,10 @@ comments were already answered, the reply log — is the core's job and arrives 
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import ClassVar
+from urllib.parse import urlencode
 
 from marvin_integration_sdk import (
     CATEGORY_DESTINATION,
@@ -32,6 +34,11 @@ DEFAULT_LOOKBACK_MEDIA = 10
 DEFAULT_MAX_AGE_DAYS = 7
 COMMENTS_PAGE_SIZE = 50
 COMMENT_FIELDS = "id,text,username,timestamp,from"
+# Publishing: a container is created, Meta fetches and processes the picture, then it is published.
+PUBLISH_POLL_SECONDS = 2
+PUBLISH_WAIT_SECONDS = 60
+MAX_CAROUSEL = 10
+CAPTION_MAX = 2200
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -147,6 +154,33 @@ class InstagramProvider(IntegrationProvider):
             description="Extend the long-lived token by another 60 days; the core stores the new token.",
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         ),
+        ProviderAction(
+            key="publish_media",
+            label="Publish a post",
+            description=(
+                "Post one picture, or a carousel of 2–10, to the feed with a caption. Dry-run by default: reports what would "
+                "go out and the day's remaining quota without posting."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "image_url": {
+                        "type": "string",
+                        "description": "A public https URL of a JPEG (the feed takes JPEG only); an asset's URL works, e.g. ${entry.image}.",
+                    },
+                    "image_urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "2–10 public JPEG URLs for a carousel, instead of image_url.",
+                    },
+                    "caption": {"type": "string", "description": "Up to 2,200 characters; #hashtags and @mentions as written."},
+                    "dry_run": {"type": "boolean", "default": True},
+                },
+                "additionalProperties": False,
+            },
+            cost_hint="free",
+            requires_approval=True,
+        ),
     )
 
     # ---- plumbing ---------------------------------------------------------------------------
@@ -230,6 +264,7 @@ class InstagramProvider(IntegrationProvider):
             "send_private_reply": self._action_send_private_reply,
             "auto_reply": self._action_auto_reply,
             "refresh_token": self._action_refresh_token,
+            "publish_media": self._action_publish_media,
         }.get(key)
         if handler is None:
             raise NotImplementedError(f"instagram has no action '{key}'")
@@ -291,3 +326,87 @@ class InstagramProvider(IntegrationProvider):
         if not token:
             raise ValueError("Instagram did not return a refreshed access token.")
         return {"expires_in": data.get("expires_in"), "secret_update": token}
+
+    # ---- publishing ---------------------------------------------------------------------------
+    # Meta's content publishing API: a container per picture (Meta fetches the URL and processes it), a wait until
+    # it reads FINISHED, then media_publish. A carousel is one container per picture plus a CAROUSEL container over
+    # them. The feed takes JPEG only and 25 posts per 24 hours; the quota endpoint says how many are used.
+    _sleep = staticmethod(time.sleep)  # patched in tests
+
+    def _post_form(self, ctx: IntegrationContext, url: str, form: dict) -> dict:
+        headers = {**self._auth(ctx), "Content-Type": "application/x-www-form-urlencoded"}
+        resp = ctx.http.post(url, data=urlencode(form).encode(), headers=headers)
+        if not resp.ok:
+            raise ValueError(f"Instagram API error: HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+    def _create_container(self, ctx: IntegrationContext, form: dict) -> str:
+        data = self._post_form(ctx, f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/media", form)
+        if not data.get("id"):
+            raise ValueError("Instagram did not return a media container id.")
+        return str(data["id"])
+
+    def _wait_ready(self, ctx: IntegrationContext, container_id: str) -> None:
+        deadline = time.monotonic() + PUBLISH_WAIT_SECONDS
+        while True:
+            data = self._get_json(ctx, f"{self._base(ctx)}/{container_id}?fields=status_code,status")
+            code = str(data.get("status_code") or "")
+            if code == "FINISHED":
+                return
+            if code in ("ERROR", "EXPIRED"):
+                raise ValueError(f"Instagram could not process the picture: {data.get('status') or code}")
+            if time.monotonic() >= deadline:
+                raise ValueError(f"Instagram is still processing the picture after {PUBLISH_WAIT_SECONDS} s; try again in a minute.")
+            self._sleep(PUBLISH_POLL_SECONDS)
+
+    def _quota(self, ctx: IntegrationContext) -> dict | None:
+        """Posts used of the 24-hour quota, or None when Meta won't say (the answer is informational either way)."""
+        try:
+            data = self._get_json(ctx, f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/content_publishing_limit?fields=quota_usage,config")
+        except Exception as e:  # noqa: BLE001
+            ctx.logger.info("instagram: quota not readable: %s", e)
+            return None
+        row = (data.get("data") or [{}])[0]
+        used, total = row.get("quota_usage"), (row.get("config") or {}).get("quota_total")
+        if used is None or total is None:
+            return None
+        return {"used": int(used), "limit": int(total), "remaining": max(0, int(total) - int(used))}
+
+    def _action_publish_media(self, args: dict, ctx: IntegrationContext) -> dict:
+        urls = [str(u) for u in (args.get("image_urls") or []) if u] or ([str(args["image_url"])] if args.get("image_url") else [])
+        if not urls:
+            raise ValueError("publish_media needs 'image_url' (one picture) or 'image_urls' (2–10 for a carousel).")
+        if len(urls) > MAX_CAROUSEL:
+            raise ValueError(f"A carousel holds at most {MAX_CAROUSEL} pictures ({len(urls)} given).")
+        if any(not u.startswith("https://") for u in urls):
+            raise ValueError("Instagram fetches the picture itself, so every image URL must be public https.")
+        caption = str(args.get("caption") or "")
+        if len(caption) > CAPTION_MAX:
+            raise ValueError(f"The caption is {len(caption)} characters; Instagram allows {CAPTION_MAX}.")
+        if not self._cfg(ctx).get("ig_user_id"):
+            raise ValueError("Missing Instagram user ID.")
+        dry_run = bool(args.get("dry_run", True))
+        quota = self._quota(ctx)
+        plan = {"images": urls, "caption": caption, "carousel": len(urls) > 1}
+        if dry_run:
+            return {"dry_run": True, "published": False, "would_publish": plan, "quota": quota}
+        if quota and quota["remaining"] == 0:
+            raise ValueError(f"Instagram's publishing limit is used up ({quota['limit']} posts per 24 hours); try again later.")
+        if len(urls) == 1:
+            container = self._create_container(ctx, {"image_url": urls[0], "caption": caption})
+        else:
+            children = [self._create_container(ctx, {"image_url": u, "is_carousel_item": "true"}) for u in urls]
+            for child in children:
+                self._wait_ready(ctx, child)
+            container = self._create_container(ctx, {"media_type": "CAROUSEL", "children": ",".join(children), "caption": caption})
+        self._wait_ready(ctx, container)
+        media = self._post_form(ctx, f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/media_publish", {"creation_id": container})
+        media_id = str(media.get("id") or "")
+        if not media_id:
+            raise ValueError("Instagram accepted the post but returned no media id.")
+        permalink = None
+        try:
+            permalink = self._get_json(ctx, f"{self._base(ctx)}/{media_id}?fields=permalink").get("permalink")
+        except Exception as e:  # noqa: BLE001 — the post is out; a missing link is not a failure
+            ctx.logger.info("instagram: permalink not readable for %s: %s", media_id, e)
+        return {"published": True, "dry_run": False, "media_id": media_id, "permalink": permalink, "images": len(urls), "quota": quota}

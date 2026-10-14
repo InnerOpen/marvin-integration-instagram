@@ -46,6 +46,7 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
 | **Action** | `send_private_reply` — `{ "comment_id", "text" }` → `{ "sent", "status", "response" }` |
 | **Action** | `auto_reply` — `{ "rules", "dry_run": true, "skip_comment_ids"?, "max_age_days": 7 }` → `{ "checked", "matched", "sent", "dry_run", "would_send"? , "records", "skipped" }` |
 | **Action** | `refresh_token` — `{}` → `{ "expires_in", "secret_update" }` (the core stores the new token) |
+| **Action** | `publish_media` — `{ "image_url" | "image_urls": [2–10], "caption"?, "dry_run": true }` → dry run `{ "would_publish", "quota" }`; real `{ "published", "media_id", "permalink", "images", "quota" }` (JPEG from a public https URL; approval-gated) |
 
 `auto_reply` returns `records` only for replies it actually sent; a dry run returns `would_send`
 instead so nothing gets logged. A record is
@@ -54,7 +55,7 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
-## What it teaches Marvin (0.4.0, SDK 0.9.0)
+## What it teaches Marvin (0.5.0, SDK 0.9.0)
 
 - **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
   rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so

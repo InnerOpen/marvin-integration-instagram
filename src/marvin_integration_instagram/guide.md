@@ -64,13 +64,22 @@ Verification). Test with a tester account first.
   so it is tried again on the next run until the comment is too old.
 - **Refresh access token** (`refresh_token`): extends the token by another 60 days. Returns `expires_in` and
   `secret_update`; only the **Instagram token refresh** scheduled task stores that new token.
+- **Publish a post** (`publish_media`): `image_url` (one picture) or `image_urls` (2–10, a carousel), `caption` (up to
+  2,200 characters), `dry_run` (default `true`). The feed takes **JPEG only**, fetched by Instagram from a public
+  https URL — an entry's main picture is `${entry.image}`, any asset's URL works, and a `media` step's `convert`
+  (`format: jpeg`) makes one from a PNG. A dry run returns `would_publish` (the pictures and caption) and `quota`
+  (`used`, `limit`, `remaining` of the 25 posts per 24 hours) and posts nothing. A real run returns `published`,
+  `media_id`, `permalink` (null if Meta withholds it) and `images`; a picture Meta can't process, or a used-up quota,
+  fails the step before anything is posted. Needs the `instagram_business_content_publish` permission on the token.
 
 ## In workflows
 
-- **Send private reply** and **Auto-reply** require approval, so a workflow's **Run integration** step refuses them
-  ("requires approval and cannot run from a workflow"), and they are not offered to workflow builders. Replies go
-  out only through the scheduled task, which an admin creates and enables. Don't build a workflow that tries to
-  reply to comments.
+- **Publish a post**, **Send private reply** and **Auto-reply** require approval: a workflow may run them only right
+  after an **Approval** step that was approved (the step refuses otherwise). The usual post: trigger
+  `entry_published` → Approval "Post “${entry.title}” to Instagram?" → Run integration `publish_media` with
+  `image_url: ${entry.image}`, `caption: ${entry.summary}`, `dry_run: false` → an entry step that sets
+  `instagram_permalink` from `${steps.<id>.output.permalink}`. Keyword replies still go out through the scheduled
+  task; don't build a workflow that polls comments to reply.
 - A workflow can call **List recent comments**, for example to read comments on a schedule. The result is
   `$steps.<id>.output.comments`. Every run re-reads the same recent comments (nothing marks one as seen), so
   de-duplicate on `comment_id` if the workflow acts on them.
@@ -79,7 +88,9 @@ Verification). Test with a tester account first.
 
 ## What it can't do
 
-- Reply publicly to a comment, like, hide or delete comments, or post media.
+- Reply publicly to a comment, like, hide or delete comments.
+- Post a video, a reel or a story, or a PNG/WebP (convert to JPEG first); schedule a post for later (use a workflow
+  wait).
 - Send a second DM to the same comment, or reply to a comment older than 7 days.
 - Send DMs to people who commented but are not allowed under your app's access level (see **Reach**).
 - React instantly: new comments are picked up on the next poll (every 2 minutes).

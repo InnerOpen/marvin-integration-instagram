@@ -230,13 +230,15 @@ class TestInstagramContract(IntegrationContract):
 
 def test_the_guide_ships_with_the_package():
     guide = load_guide(InstagramProvider)
-    assert guide.startswith("# Instagram") and "IG Reply Log" in guide and "cannot run from a workflow" in guide
+    assert guide.startswith("# Instagram") and "IG Reply Log" in guide and "Publish a post" in guide
 
 
 def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
-    # The guide says replies cannot run from a workflow; core refuses any action that requires approval.
+    # The core runs an approval-gated action only right after an approved Approval step; the guide says so and names them.
     needs_approval = {a.key for a in InstagramProvider.actions if a.requires_approval}
-    assert needs_approval == {"send_private_reply", "auto_reply"}
+    assert needs_approval == {"send_private_reply", "auto_reply", "publish_media"}
+    workflows = load_guide(InstagramProvider).split("## In workflows", 1)[1].split("## ", 1)[0]
+    assert "Approval" in workflows and all(label in workflows for label in ("Publish a post", "Send private reply", "Auto-reply"))
 
 
 def test_no_recipes_are_shipped():
