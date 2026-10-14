@@ -76,9 +76,11 @@ Verification). Test with a tester account first.
 
 - **Publish a post**, **Send private reply** and **Auto-reply** require approval: a workflow may run them only right
   after an **Approval** step that was approved (the step refuses otherwise). The usual post: trigger
-  `entry_published` → Approval "Post “${entry.title}” to Instagram?" → Run integration `publish_media` with
-  `image_url: ${entry.image}`, `caption: ${entry.summary}`, `dry_run: false` → an entry step that sets
-  `instagram_permalink` from `${steps.<id>.output.permalink}`. Keyword replies still go out through the scheduled
+  `entry_published` → Approval "Post “${entry.title}” to Instagram?" → a `media` step `convert` to `jpeg` with
+  `source: ${entry.image}` (the feed takes JPEG only; the copy is kept as a derived asset) → Run integration
+  `publish_media` with `image_url: ${steps.<media id>.output.asset.url}`, `caption: ${entry.summary}`,
+  `dry_run: false` → an entry step that sets `instagram_permalink` from `${steps.<id>.output.permalink}`. The
+  plugin ships this as the **Post to Instagram when published** recipe. Keyword replies still go out through the scheduled
   task; don't build a workflow that polls comments to reply.
 - A workflow can call **List recent comments**, for example to read comments on a schedule. The result is
   `$steps.<id>.output.comments`. Every run re-reads the same recent comments (nothing marks one as seen), so

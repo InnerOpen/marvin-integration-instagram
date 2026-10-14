@@ -90,8 +90,9 @@ class InstagramProvider(IntegrationProvider):
             id="post-on-publish",
             title="Post to Instagram when published",
             outcome=(
-                "When an entry with a main picture is published, an editor is asked whether to post it; once approved, the picture "
-                "goes to the feed with the summary and your hashtags as the caption, and the post's link is kept on the entry."
+                "When an entry with a main picture is published, an editor is asked whether to post it; once approved, a JPEG copy "
+                "of the picture goes to the feed with the summary and your hashtags as the caption, and the post's link is kept on "
+                "the entry."
             ),
             category="Social and community",
             tags=("instagram", "social", "publishing", "approval"),
@@ -110,11 +111,22 @@ class InstagramProvider(IntegrationProvider):
                         "expires_in_hours": 48,
                     },
                     {
+                        # The feed takes JPEG only: a JPEG copy of the main picture (a PNG's transparency flattened onto
+                        # white; an existing JPEG re-encoded once and reused on a re-run), kept as a derived asset.
+                        "kind": "media",
+                        "id": "jpeg",
+                        "op": "convert",
+                        "source": "${entry.image}",
+                        "format": "jpeg",
+                        "quality": 90,
+                        "when": {"field": "steps.ok.output.decision", "op": "eq", "value": "approved"},
+                    },
+                    {
                         "kind": "integration",
                         "id": "post",
                         "integration": "{{instagram_integration}}",
                         "action": "publish_media",
-                        "args": {"image_url": "${entry.image}", "caption": "${entry.summary} {{hashtags}}", "dry_run": False},
+                        "args": {"image_url": "${steps.jpeg.output.asset.url}", "caption": "${entry.summary} {{hashtags}}", "dry_run": False},
                         "when": {"field": "steps.ok.output.decision", "op": "eq", "value": "approved"},
                     },
                     {
@@ -144,7 +156,10 @@ class InstagramProvider(IntegrationProvider):
             },
             side_effects=(
                 {"kind": "external_post", "description": "One Instagram feed post per approved run (Instagram allows 25 per 24 hours)."},
-                {"kind": "content_mutation", "description": "Sets instagram_media_id and instagram_permalink on the entry."},
+                {
+                    "kind": "content_mutation",
+                    "description": "Keeps a JPEG copy of the picture as a derived asset; sets instagram_media_id and instagram_permalink on the entry.",
+                },
             ),
         ),
     )
