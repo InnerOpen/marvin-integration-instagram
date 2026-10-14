@@ -243,12 +243,13 @@ def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
 
 def test_the_post_on_publish_recipe_asks_first_then_posts_the_main_picture():
     (recipe,) = InstagramProvider.recipes
-    ask, post, keep = recipe.definition["actions"]
+    ask, jpeg, post, keep = recipe.definition["actions"]
     assert ask["kind"] == "approval" and post["when"] == {"field": "steps.ok.output.decision", "op": "eq", "value": "approved"}
+    assert (jpeg["kind"], jpeg["op"], jpeg["format"], jpeg["source"], jpeg["when"]) == ("media", "convert", "jpeg", "${entry.image}", post["when"])
     assert (post["action"], post["integration"], post["args"]["image_url"], post["args"]["dry_run"]) == (
         "publish_media",
         "{{instagram_integration}}",
-        "${entry.image}",
+        "${steps.jpeg.output.asset.url}",
         False,
     )
     assert keep["metadata"]["instagram_permalink"] == "${steps.post.output.permalink}" and keep["when"]["field"] == "steps.post.output.published"
