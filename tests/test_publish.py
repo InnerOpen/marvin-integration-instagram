@@ -6,7 +6,7 @@ import logging
 from urllib.parse import parse_qs
 
 import pytest
-from marvin_integration_sdk import IntegrationContext, Response
+from marvin_integration_sdk import IntegrationContext, IntegrationError, Response
 
 from marvin_integration_instagram import InstagramProvider
 from marvin_integration_instagram.provider import PUBLISH_WAIT_SECONDS
@@ -146,3 +146,103 @@ def test_the_action_is_declared_approval_gated_and_free():
     action = next(a for a in InstagramProvider.actions if a.key == "publish_media")
     assert action.requires_approval and action.cost_hint == "free"
     assert set(action.input_schema["properties"]) == {"image_url", "image_urls", "caption", "dry_run"}
+
+
+# ── social.post: the shared capability, mapped onto the same publishing ─────────
+
+
+def test_post_declares_the_social_capability_approval_gated():
+    action = next(a for a in InstagramProvider.actions if a.key == "post")
+    assert action.capability == "social.post" and action.requires_approval
+    assert set(action.input_schema["properties"]) == {"text", "images", "alt", "link", "dry_run"}
+    assert action.input_schema["required"] == ["text"]
+    assert {"posted", "post_id", "url", "network", "would_post"} <= set(action.output_schema["properties"])
+    # publish_media keeps its own arguments and stays out of capability routing
+    old = next(a for a in InstagramProvider.actions if a.key == "publish_media")
+    assert old.capability is None and set(old.input_schema["properties"]) == {"image_url", "image_urls", "caption", "dry_run"}
+    assert [a.key for a in InstagramProvider.actions if a.capability == "social.post"] == ["post"]
+
+
+def test_post_one_image_publishes_text_as_the_caption_and_returns_the_contract_output():
+    http = _PublishHttp(gets={"?fields=status_code": {"status_code": "FINISHED"}})
+    out = InstagramProvider().run_action("post", {"text": "Hello #hi", "images": [PIC]}, _ctx(http))  # no dry_run: posts for real
+    assert http.posts[0]["form"] == {"image_url": PIC, "caption": "Hello #hi"}
+    assert out["posted"] is True and out["network"] == "instagram"
+    assert out["post_id"] == "99001" and out["url"] == "https://www.instagram.com/p/abc/"
+
+
+def test_post_several_images_make_a_carousel_with_alt_text_on_each_picture():
+    pics = [PIC, "https://assets.example.test/2.jpg"]
+    http = _PublishHttp(gets={"?fields=status_code": {"status_code": "FINISHED"}})
+    InstagramProvider().run_action("post", {"text": "Two", "images": pics, "alt": ["A cat", "A dog"]}, _ctx(http))
+    forms = [p["form"] for p in http.posts]
+    assert forms[0] == {"image_url": PIC, "alt_text": "A cat", "is_carousel_item": "true"}
+    assert forms[1] == {"image_url": pics[1], "alt_text": "A dog", "is_carousel_item": "true"}
+    assert forms[2] == {"media_type": "CAROUSEL", "children": "c1,c2", "caption": "Two"}
+
+
+def test_post_alt_may_be_shorter_than_the_images_and_single_alt_rides_on_the_container():
+    http = _PublishHttp(gets={"?fields=status_code": {"status_code": "FINISHED"}})
+    InstagramProvider().run_action("post", {"text": "x", "images": [PIC], "alt": ["A cat"]}, _ctx(http))
+    assert http.posts[0]["form"] == {"image_url": PIC, "alt_text": "A cat", "caption": "x"}
+
+
+def test_post_appends_the_link_to_the_caption_once():
+    http = _PublishHttp()
+    provider = InstagramProvider()
+    out = provider.run_action("post", {"text": "New", "images": [PIC], "link": "https://example.test/p", "dry_run": True}, _ctx(http))
+    assert out["would_post"]["caption"] == "New\n\nhttps://example.test/p"
+    out = provider.run_action(
+        "post", {"text": "See https://example.test/p", "images": [PIC], "link": "https://example.test/p", "dry_run": True}, _ctx(http)
+    )
+    assert out["would_post"]["caption"] == "See https://example.test/p"
+
+
+def test_post_dry_run_reports_would_post_and_quota_and_sends_nothing():
+    http = _PublishHttp()
+    out = InstagramProvider().run_action("post", {"text": "Hi", "images": [PIC], "alt": ["Cat"], "dry_run": True}, _ctx(http))
+    assert out == {
+        "posted": False,
+        "dry_run": True,
+        "post_id": None,
+        "url": None,
+        "network": "instagram",
+        "would_post": {"images": [PIC], "caption": "Hi", "carousel": False, "alt": ["Cat"]},
+        "quota": {"used": 3, "limit": 25, "remaining": 22},
+    }
+    assert http.posts == []
+
+
+def test_post_without_an_image_is_refused_with_a_clear_error():
+    http = _PublishHttp()
+    for args in ({"text": "just words"}, {"text": "just words", "images": []}):
+        with pytest.raises(IntegrationError, match="can't post text alone") as exc:
+            InstagramProvider().run_action("post", args, _ctx(http))
+        assert exc.value.code == "unsupported" and isinstance(exc.value, ValueError)
+    assert http.posts == [] and http.get_log == []
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"images": [PIC]}, "needs text"),
+        ({"text": "x", "images": [f"https://x.test/{i}.jpg" for i in range(11)]}, "at most 10"),
+        ({"text": "x", "images": ["http://plain.test/a.jpg"]}, "public https"),
+        ({"text": "x" * 2201, "images": [PIC]}, "allows 2200"),
+        ({"text": "x" * 2190, "images": [PIC], "link": "https://example.test/long-path"}, "text and link|allows 2200"),
+        ({"text": "x", "images": [PIC], "alt": ["a", "b"]}, "one text per image"),
+        ({"text": "x", "images": [PIC], "alt": ["a" * 1001]}, "Alt text is limited"),
+    ],
+)
+def test_post_refusals_happen_before_any_call(args, message):
+    http = _PublishHttp()
+    with pytest.raises(IntegrationError, match=message):
+        InstagramProvider().run_action("post", {**args, "dry_run": False}, _ctx(http))
+    assert http.posts == [] and http.get_log == []
+
+
+def test_post_still_respects_the_quota():
+    http = _PublishHttp(quota=(25, 25))
+    with pytest.raises(ValueError, match="limit is used up"):
+        InstagramProvider().run_action("post", {"text": "x", "images": [PIC]}, _ctx(http))
+    assert http.posts == []

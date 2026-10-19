@@ -21,6 +21,7 @@ from marvin_integration_sdk import (
     CATEGORY_DESTINATION,
     CredentialField,
     IntegrationContext,
+    IntegrationError,
     IntegrationProvider,
     ProviderAction,
     WorkflowRecipe,
@@ -40,6 +41,7 @@ PUBLISH_POLL_SECONDS = 2
 PUBLISH_WAIT_SECONDS = 60
 MAX_CAROUSEL = 10
 CAPTION_MAX = 2200
+ALT_MAX = 1000  # Meta's limit for an image's alt text (verify against the current docs)
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -53,6 +55,17 @@ def _parse_ts(value: str | None) -> datetime | None:
             return datetime.fromisoformat(value)
         except ValueError:
             return None
+
+
+def _refusal(urls: list[str], caption: str) -> str | None:
+    """Why Instagram can't take this post (too many pictures, a non-https URL, a long caption), or None."""
+    if len(urls) > MAX_CAROUSEL:
+        return f"A carousel holds at most {MAX_CAROUSEL} pictures ({len(urls)} given)."
+    if any(not u.startswith("https://") for u in urls):
+        return "Instagram fetches the picture itself, so every image URL must be public https."
+    if len(caption) > CAPTION_MAX:
+        return f"The caption is {len(caption)} characters; Instagram allows {CAPTION_MAX}."
+    return None
 
 
 def _record(match: dict) -> dict:
@@ -261,6 +274,49 @@ class InstagramProvider(IntegrationProvider):
             cost_hint="free",
             requires_approval=True,
         ),
+        ProviderAction(
+            key="post",
+            label="Post to Instagram",
+            description=(
+                "Marvin's shared social post: the text becomes the caption (a link is appended to it) and the pictures become "
+                "one feed post, or a carousel of 2–10. Instagram can't post text alone, so at least one picture is required."
+            ),
+            capability="social.post",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": f"The caption, up to {CAPTION_MAX} characters including the link."},
+                    "images": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": MAX_CAROUSEL,
+                        "description": "1–10 public https JPEG URLs (Instagram needs at least one); more than one makes a carousel.",
+                    },
+                    "alt": {"type": "array", "items": {"type": "string"}, "description": "Alt text, one per image, in order."},
+                    "link": {"type": "string", "description": "Appended to the caption: Instagram captions do not make links clickable."},
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Report what would be posted, and the day's quota, without posting.",
+                    },
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "posted": {"type": "boolean"},
+                    "post_id": {"type": ["string", "null"]},
+                    "url": {"type": ["string", "null"], "description": "The post's permalink."},
+                    "network": {"type": "string", "const": "instagram"},
+                    "would_post": {"type": "object", "description": "A dry run only: what would be sent."},
+                },
+            },
+            cost_hint="free",
+            requires_approval=True,
+        ),
     )
 
     # ---- plumbing ---------------------------------------------------------------------------
@@ -345,6 +401,7 @@ class InstagramProvider(IntegrationProvider):
             "auto_reply": self._action_auto_reply,
             "refresh_token": self._action_refresh_token,
             "publish_media": self._action_publish_media,
+            "post": self._action_post,
         }.get(key)
         if handler is None:
             raise NotImplementedError(f"instagram has no action '{key}'")
@@ -462,26 +519,32 @@ class InstagramProvider(IntegrationProvider):
         urls = [str(u) for u in (args.get("image_urls") or []) if u] or ([str(args["image_url"])] if args.get("image_url") else [])
         if not urls:
             raise ValueError("publish_media needs 'image_url' (one picture) or 'image_urls' (2–10 for a carousel).")
-        if len(urls) > MAX_CAROUSEL:
-            raise ValueError(f"A carousel holds at most {MAX_CAROUSEL} pictures ({len(urls)} given).")
-        if any(not u.startswith("https://") for u in urls):
-            raise ValueError("Instagram fetches the picture itself, so every image URL must be public https.")
-        caption = str(args.get("caption") or "")
-        if len(caption) > CAPTION_MAX:
-            raise ValueError(f"The caption is {len(caption)} characters; Instagram allows {CAPTION_MAX}.")
+        return self._publish(ctx, urls, str(args.get("caption") or ""), None, bool(args.get("dry_run", True)))
+
+    def _publish(self, ctx: IntegrationContext, urls: list[str], caption: str, alts: list[str] | None, dry_run: bool) -> dict:
+        """One picture or a carousel to the feed: what publish_media and post share. `alts` is one alt text per picture
+        (or None); it rides on each picture's container. Checks everything before the first call."""
+        if problem := _refusal(urls, caption):
+            raise ValueError(problem)
         if not self._cfg(ctx).get("ig_user_id"):
             raise ValueError("Missing Instagram user ID.")
-        dry_run = bool(args.get("dry_run", True))
+        alts = alts or [""] * len(urls)
         quota = self._quota(ctx)
         plan = {"images": urls, "caption": caption, "carousel": len(urls) > 1}
+        if any(alts):
+            plan["alt"] = alts
         if dry_run:
             return {"dry_run": True, "published": False, "would_publish": plan, "quota": quota}
         if quota and quota["remaining"] == 0:
             raise ValueError(f"Instagram's publishing limit is used up ({quota['limit']} posts per 24 hours); try again later.")
+
+        def picture(url: str, alt: str, **extra) -> dict:
+            return {"image_url": url, **({"alt_text": alt} if alt else {}), **extra}
+
         if len(urls) == 1:
-            container = self._create_container(ctx, {"image_url": urls[0], "caption": caption})
+            container = self._create_container(ctx, {**picture(urls[0], alts[0]), "caption": caption})
         else:
-            children = [self._create_container(ctx, {"image_url": u, "is_carousel_item": "true"}) for u in urls]
+            children = [self._create_container(ctx, picture(u, a, is_carousel_item="true")) for u, a in zip(urls, alts, strict=True)]
             for child in children:
                 self._wait_ready(ctx, child)
             container = self._create_container(ctx, {"media_type": "CAROUSEL", "children": ",".join(children), "caption": caption})
@@ -496,3 +559,46 @@ class InstagramProvider(IntegrationProvider):
         except Exception as e:  # noqa: BLE001 — the post is out; a missing link is not a failure
             ctx.logger.info("instagram: permalink not readable for %s: %s", media_id, e)
         return {"published": True, "dry_run": False, "media_id": media_id, "permalink": permalink, "images": len(urls), "quota": quota}
+
+    def _action_post(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.post` capability, mapped onto the same publishing as publish_media: text → caption, link appended to
+        it (captions don't make links clickable), images → one picture or a carousel, alt → each picture's alt text.
+        Unlike publish_media the real post is the default: the approval step before it is the gate."""
+        text = str(args.get("text") or "").strip()
+        if not text:
+            raise IntegrationError("Instagram needs text for the caption.", code="unsupported")
+        images = args.get("images") or []
+        if not isinstance(images, list) or not all(isinstance(u, str) for u in images):
+            raise IntegrationError("'images' must be a list of public image URLs.", code="unsupported")
+        urls = [u.strip() for u in images if u.strip()]
+        if not urls:
+            raise IntegrationError("Instagram can't post text alone: it needs at least one image.", code="unsupported")
+        alt = args.get("alt") or []
+        if not isinstance(alt, list) or len(alt) > len(urls):
+            raise IntegrationError(f"'alt' is one text per image ({len(urls)} image(s) given).", code="unsupported")
+        alts = [str(a or "").strip() for a in alt] + [""] * (len(urls) - len(alt))
+        if any(len(a) > ALT_MAX for a in alts):
+            raise IntegrationError(f"Alt text is limited to {ALT_MAX} characters.", code="unsupported")
+        link = str(args.get("link") or "").strip()
+        caption = f"{text}\n\n{link}" if link and link not in text else text
+        if problem := _refusal(urls, caption):
+            raise IntegrationError(problem, code="unsupported")
+        out = self._publish(ctx, urls, caption, alts, bool(args.get("dry_run", False)))
+        if out["published"]:
+            return {
+                "posted": True,
+                "post_id": out["media_id"],
+                "url": out["permalink"],
+                "network": "instagram",
+                "images": out["images"],
+                "quota": out["quota"],
+            }
+        return {
+            "posted": False,
+            "dry_run": True,
+            "post_id": None,
+            "url": None,
+            "network": "instagram",
+            "would_post": out["would_publish"],
+            "quota": out["quota"],
+        }

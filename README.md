@@ -46,7 +46,29 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
 | **Action** | `send_private_reply` — `{ "comment_id", "text" }` → `{ "sent", "status", "response" }` |
 | **Action** | `auto_reply` — `{ "rules", "dry_run": true, "skip_comment_ids"?, "max_age_days": 7 }` → `{ "checked", "matched", "sent", "dry_run", "would_send"? , "records", "skipped" }` |
 | **Action** | `refresh_token` — `{}` → `{ "expires_in", "secret_update" }` (the core stores the new token) |
+| **Action** | `post` — the shared **`social.post`** capability, see below |
 | **Action** | `publish_media` — `{ "image_url" | "image_urls": [2–10], "caption"?, "dry_run": true }` → dry run `{ "would_publish", "quota" }`; real `{ "published", "media_id", "permalink", "images", "quota" }` (JPEG from a public https URL; approval-gated) |
+
+### `post` — the shared `social.post` capability
+
+Marvin's one "post this" shape, so a workflow step can post to every connected network. It is the same publishing as
+`publish_media` (which keeps its own arguments), approval-gated, and mapped like this:
+
+| `social.post` arg | Instagram |
+|---|---|
+| `text` (required) | the caption (up to 2,200 characters, text and link together) |
+| `images` (0–10 public https URLs) | `image_url` for one picture, a carousel for 2–10. **At least one is required**: Instagram can't post text alone, so none is refused (`IntegrationError`, code `unsupported`). JPEG only |
+| `alt` (one per image) | `alt_text` on each image's container (up to 1,000 characters) |
+| `link` | appended to the caption after a blank line (Instagram captions don't make links clickable) unless the text already contains it |
+| `dry_run` | reports `would_post` and the day's `quota`, calls nothing but the quota read. Default **false** (the approval step before the post is the gate; `publish_media` stays dry-run by default) |
+
+Output: `{ "posted", "post_id", "url", "network": "instagram", "images", "quota" }`, and on a dry run
+`{ "posted": false, "dry_run": true, "post_id": null, "url": null, "network", "would_post": { "images", "caption", "carousel", "alt"? }, "quota" }`.
+The 25-posts-per-24-hours quota is checked as in `publish_media`.
+
+**Verify:** `alt_text` on `POST /{ig-user-id}/media` is documented for images (single and carousel items), not for the
+carousel container; check it against your `api_version` in Meta's content-publishing reference. If Meta rejects the parameter
+on your version, drop `alt` from the step.
 
 `auto_reply` returns `records` only for replies it actually sent; a dry run returns `would_send`
 instead so nothing gets logged. A record is
@@ -55,7 +77,7 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
-## What it teaches Marvin (0.5.2, SDK 0.9.0)
+## What it teaches Marvin (0.6.0, SDK 0.9.0)
 
 - **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
   rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so

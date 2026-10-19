@@ -2,8 +2,8 @@
 
 Reads the comments on your recent Instagram posts and answers matching ones with a **private reply** (a DM to the
 commenter). Keyword rules are ordinary Marvin entries; a scheduled task polls every 2 minutes and sends the replies.
-It talks to the Instagram Login flavour of the Graph API (`graph.instagram.com`). It cannot post, delete or moderate
-anything.
+It talks to the Instagram Login flavour of the Graph API (`graph.instagram.com`). It posts pictures to the feed
+(and carousels), and cannot delete or moderate anything.
 
 ## Connect it
 
@@ -71,10 +71,19 @@ Verification). Test with a tester account first.
   (`used`, `limit`, `remaining` of the 25 posts per 24 hours) and posts nothing. A real run returns `published`,
   `media_id`, `permalink` (null if Meta withholds it) and `images`; a picture Meta can't process, or a used-up quota,
   fails the step before anything is posted. Needs the `instagram_business_content_publish` permission on the token.
+- **Post to Instagram** (`post`): Marvin's shared **social post** (capability `social.post`), the same publishing as
+  *Publish a post* under the common arguments: `text` (required; the caption), `images` (1–10 public https JPEG URLs;
+  more than one is a carousel), `alt` (one alt text per image, optional), `link` (appended to the caption on its own
+  line, since Instagram captions don't make links clickable), `dry_run` (default `false`: the approval step before it
+  is the gate). Instagram can't post text alone: no image is refused with a clear error, as are an over-long caption
+  (text and link together, 2,200 characters) and a non-https URL. Returns `posted`, `post_id`, `url` (the permalink),
+  `network` (`instagram`), `images` and `quota`; a dry run returns `posted: false` and `would_post` instead, and posts
+  nothing. A workflow step that names the capability `social.post` instead of an action posts through every connected
+  network, so it needs the pictures resolved to JPEG URLs first (a `media` `convert` step).
 
 ## In workflows
 
-- **Publish a post**, **Send private reply** and **Auto-reply** require approval: a workflow may run them only right
+- **Publish a post**, **Post to Instagram**, **Send private reply** and **Auto-reply** require approval: a workflow may run them only right
   after an **Approval** step that was approved (the step refuses otherwise). The usual post: trigger
   `entry_published` → Approval "Post “${entry.title}” to Instagram?" → a `media` step `convert` to `jpeg` with
   `source: ${entry.image}` (the feed takes JPEG only; the copy is kept as a derived asset) → Run integration
