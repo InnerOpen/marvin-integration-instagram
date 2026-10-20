@@ -1,13 +1,12 @@
 # marvin-integration-instagram
 
-A [Marvin](https://github.com/InnerOpen/marvin) integration that polls the comments on your recent
-Instagram posts and sends **private replies** (DMs) when a comment matches a keyword rule.
-Category: *destination*. It also implements Marvin's shared **social engagement** capabilities (read comments, reply
-privately or publicly, hide, delete), which the shared auto-reply engine in Marvin core uses on every network.
+A [Marvin](https://github.com/InnerOpen/marvin) integration for Instagram: **post** to the feed, and **read, answer, hide and
+delete the comments** on your posts. Category: *destination*. It implements Marvin's shared social capabilities
+(`social.post`, `social.comments`, `social.reply`, `social.hide`, `social.delete_comment`).
 
-The rules are ordinary Marvin content: an `ig-auto-reply` entry holds a post id (or `*`), a list of
-keywords and the reply text, and only `published` rules apply. Every real send is recorded as an
-`ig-reply-log` entry, which is also what keeps a comment from being answered twice.
+**Rules and auto-reply live in Marvin's Social, not here.** Since 0.8.0 the plugin has no keyword rules, reply log or
+auto-reply task of its own: write rules under **Social › Instagram › Rules** and switch the auto-reply on that page; Marvin's
+engine reads comments through the `comments` action and answers through `reply`. See *Moving from 0.7* below.
 
 ## Install
 
@@ -28,14 +27,21 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
    **long-lived user token** (60 days). Note the numeric **Instagram user id** of that account.
 2. In Marvin: **Settings → Integrations → Instagram → Configure**, paste the token and fill in the
    user id. Save — the card should turn `ok`.
-3. The integration **declares the content it needs** — two entry types, two collections and two
-   scheduled tasks. Marvin offers them for review after install; apply them, then write a rule and
-   publish it. The tasks arrive **disabled and in dry-run**: flip `args.dry_run` to `false` once the
-   execution log shows the right `would_send`, then enable.
+3. The integration **declares one piece of content**: the *Instagram token refresh* scheduled task (every 30 days; the token
+   lasts 60). Marvin offers it for review after install; apply it and enable it once the card reads `ok`. It arrives disabled.
+4. To answer comments, write rules in **Social › Instagram › Rules** and set the network's auto-reply to rehearsal, then on.
 
 > Under Meta **Standard Access** a private reply only reaches accounts that hold a role on your app
 > (admins/testers). Replying to the public needs Advanced Access (App Review + Business
 > Verification). Replies are one per comment, within 7 days of the comment.
+
+## Moving from 0.7
+
+0.8.0 stops shipping the `ig-auto-reply` / `ig-reply-log` entry types, the two "Social —" collections, the *Instagram auto-reply* scheduled
+task, and the `list_recent_comments`, `send_private_reply` and `auto_reply` actions (nothing in Marvin or the plugin's recipes used them;
+`comments` and `reply` replace them). Marvin core (with Social) removes the old leftovers from its workspaces with a one-off migration and no longer reads
+them; write the rules again in Social. Marvin's blueprint catalogue is read from the installed plugin, so an upgraded install simply stops
+offering those blueprints (content already applied is ordinary workspace content and is not touched by the plugin).
 
 ## Credential, config & actions
 
@@ -43,9 +49,6 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
 |---|---|
 | **Credential** | `access_token` — long-lived Instagram Login user token |
 | **Config** | `ig_user_id` (required), `api_version` (`v22.0`), `lookback_media` (`10` recent posts), `own_username` (never answered) |
-| **Action** | `list_recent_comments` — `{ "limit"?: n }` → `{ "comments": [...] }` |
-| **Action** | `send_private_reply` — `{ "comment_id", "text" }` → `{ "sent", "status", "response" }` |
-| **Action** | `auto_reply` — `{ "rules", "dry_run": true, "skip_comment_ids"?, "max_age_days": 7 }` → `{ "checked", "matched", "sent", "dry_run", "would_send"? , "records", "skipped" }` |
 | **Action** | `refresh_token` — `{}` → `{ "expires_in", "secret_update" }` (the core stores the new token) |
 | **Action** | `post` — the shared **`social.post`** capability, see below |
 | **Action** | `comments`, `reply`, `hide`, `delete_comment` — the shared **`social.comments`**, **`social.reply`**, **`social.hide`**, **`social.delete_comment`** capabilities, see [Shared engagement](#shared-engagement-capabilities) |
@@ -72,19 +75,10 @@ The 25-posts-per-24-hours quota is checked as in `publish_media`.
 carousel container; check it against your `api_version` in Meta's content-publishing reference. If Meta rejects the parameter
 on your version, drop `alt` from the step.
 
-`auto_reply` returns `records` only for replies it actually sent; a dry run returns `would_send`
-instead so nothing gets logged. A record is
-`{ comment_id, media_id, username, user_id, commenter, keyword, reply, text, sent_at }` — Meta withholds
-`username` for commenters with no role on the app, so `commenter` falls back to the user id and then the
-comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
-aborts the run.
-
 ## Shared engagement capabilities
 
-Marvin core's shared auto-reply engine reads comments and replies through these capabilities, on every connected
-network. Each sits on one new action and reuses the plugin's existing Graph calls; the existing actions
-(`list_recent_comments`, `send_private_reply`, `auto_reply`, `publish_media`, `post`, `refresh_token`) and the
-blueprints are unchanged.
+Marvin's Social (its inbox, rules and auto-reply) reads comments and replies through these capabilities, on every connected
+network. Each sits on one action and reuses the plugin's Graph calls.
 
 | Capability | Action | Gated | Arguments → output | Graph call |
 |---|---|---|---|---|
@@ -107,20 +101,13 @@ new items, so a backlog drains in order and nothing is skipped. A bad cursor rai
 receive, so `kinds` containing `mention` is accepted and yields nothing for it, and asking for *only* mentions is
 refused (`unsupported`).
 
-**`social.reply`.** `private: true` (the default) is the existing private reply, sent by the same code as
-`send_private_reply`, with the checks it implies plus the window now enforced up front: a comment older than 7 days,
+**`social.reply`.** `private: true` (the default) is the existing private reply, a DM to the commenter, with the window enforced up front: a comment older than 7 days,
 or from the account's own `own_username`, is refused with `unsupported` before anything is sent (also on a dry run).
-`private: false` is a public reply in the thread (no window). Unlike `send_private_reply`, a failure from Meta is
-raised, never returned as `replied: false`. `url` is null: the API gives a reply no link. `dry_run` checks the same
+`private: false` is a public reply in the thread (no window). A failure from Meta is raised, never returned as `replied: false`. `url` is null: the API gives a reply no link. `dry_run` checks the same
 things and returns `replied: false` and `would_reply`; the real send is the default, since the approval step before it
 is the gate. Meta's own one-reply-per-comment limit is not pre-checked; Meta's rejection is raised.
 
 Refusals the plugin knows about use `IntegrationError` with code `unsupported`.
-
-**The plugin's own auto-reply.** Once the shared engine is switched on for Instagram in Marvin, it replaces this
-plugin's **Instagram auto-reply** scheduled task, which is then turned off (not deleted). Until then the task, the
-`auto_reply` action, the `ig-auto-reply` rules and the `ig-reply-log` entries keep working exactly as before; the
-shared engine reads the same rules and log, so nothing is answered twice.
 
 ### Token permissions
 
@@ -129,7 +116,7 @@ Instagram Login scopes (verify the exact names and which combination each call n
 | Call | Scope |
 |---|---|
 | list posts, read the account (`check`) | `instagram_business_basic` |
-| read comments and replies (`comments`, `list_recent_comments`) | `instagram_business_basic`, `instagram_business_manage_comments` |
+| read comments and replies (`comments`) | `instagram_business_basic`, `instagram_business_manage_comments` |
 | public reply, hide, delete comment | `instagram_business_manage_comments` |
 | private reply (DM) | `instagram_business_manage_messages` (and `instagram_business_manage_comments` to read the comment) |
 | `post`, `publish_media` | `instagram_business_content_publish` |
@@ -156,15 +143,14 @@ These are written from the Graph API reference as remembered, with no live call 
 - Whether Meta limits a private reply to top-level comments only (replies to a reply are not pre-checked), and the
   length limits on a comment and on a DM (not pre-checked; Meta's rejection is raised).
 
-## What it teaches Marvin (0.7.0, SDK 0.9.0)
+## What it teaches Marvin (0.8.0, SDK 0.9.0)
 
-- **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
-  rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so
-  only the scheduled task sends them), and what each failure message means. Marvin's agents read it when building
+- **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, where rules and auto-reply live
+  (Marvin's Social), what each action returns, what workflows can and cannot run (replies need approval), and what each failure
+  message means. Marvin's agents read it when building
   workflows where Instagram is connected, and Marvin's manual search finds it.
-- **No new recipes**, on purpose: the shared engagement flows (read, auto-reply, moderate) belong to Marvin core's
-  shared engine and its `social.*` workflow steps, and the rule/log types, collections and scheduled tasks are already
-  declared as blueprints. The one recipe is the post-on-publish workflow.
+- **No new recipes**, on purpose: the shared engagement flows (read, auto-reply, moderate) belong to Marvin's Social and its
+  `social.*` workflow steps. The one recipe is the post-on-publish workflow, and the one blueprint is the token-refresh task.
 
 ## Logo
 
@@ -177,5 +163,5 @@ uv run --extra dev pytest
 ```
 
 The provider depends only on `marvin-integration-sdk` — not on Marvin core — so tests run standalone.
-`matching.py` is pure Python (no SDK import) and holds all the keyword logic; `content.py` declares
-the workspace content the actions depend on, which the core offers for review rather than creating.
+`engagement.py` is pure Python (no SDK import): the normalised comment items and the cursor. `content.py` declares the
+token-refresh task, which the core offers for review rather than creating.

@@ -68,9 +68,6 @@ def _ctx(secret="tok", http=None, **config):
     return IntegrationContext(config=cfg, secret=secret, logger=_LOG, http=http or _graph_http())
 
 
-RULES = [{"post_id": "*", "keywords": "size, sizing", "reply": "Sizes S–XL, DM us for a chart."}]
-
-
 def test_check_ok_error_and_unconfigured():
     p = InstagramProvider()
     assert p.check(_ctx()) == ("ok", None)
@@ -82,77 +79,34 @@ def test_check_ok_error_and_unconfigured():
 def test_missing_secret_raises_and_unknown_action_raises():
     p = InstagramProvider()
     with pytest.raises(ValueError):
-        p.run_action("list_recent_comments", {}, _ctx(secret=None))
+        p.run_action("comments", {}, _ctx(secret=None))
     with pytest.raises(NotImplementedError):
         p.run_action("nope", {}, _ctx())
 
 
-def test_list_recent_comments_walks_media_and_normalizes():
-    http = _graph_http()
-    out = InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http))
-    assert [c["comment_id"] for c in out["comments"]] == ["c1", "c2", "c3"]
-    assert out["comments"][0]["media_id"] == "m1"
-    assert out["comments"][1]["username"] == "" and out["comments"][1]["user_id"] == "u2"  # username withheld, from.id kept
-    assert out["comments"][0]["timestamp"].startswith(NOW.strftime("%Y-%m-%d"))
-    assert all(g["headers"] == {"Authorization": "Bearer tok"} for g in http.gets)
-    assert http.gets[0]["url"].startswith(f"{BASE}/me/media?")
+def test_the_old_keyword_actions_are_gone():
+    """0.8.0: Marvin's Social replaces auto_reply, list_recent_comments and send_private_reply (comments and reply do their jobs)."""
+    keys = {a.key for a in InstagramProvider.actions}
+    assert not keys & {"list_recent_comments", "send_private_reply", "auto_reply"}
+    assert {"comments", "reply", "hide", "delete_comment", "post", "publish_media", "refresh_token"} <= keys
+    for gone in ("list_recent_comments", "send_private_reply", "auto_reply"):
+        with pytest.raises(NotImplementedError):
+            InstagramProvider().run_action(gone, {}, _ctx())
 
 
 def test_lookback_media_string_is_cast():
     http = _graph_http()
-    InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http, lookback_media="3"))
+    InstagramProvider().run_action("comments", {}, _ctx(http=http, lookback_media="3"))
     assert "limit=3" in http.gets[0]["url"]
+    assert http.gets[0]["headers"] == {"Authorization": "Bearer tok"}
     http = _graph_http()
-    InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=http, lookback_media="bogus"))
+    InstagramProvider().run_action("comments", {}, _ctx(http=http, lookback_media="bogus"))
     assert "limit=10" in http.gets[0]["url"]
 
 
 def test_get_failure_raises_value_error():
     with pytest.raises(ValueError, match="HTTP 500"):
-        InstagramProvider().run_action("list_recent_comments", {}, _ctx(http=_graph_http(get_status=500)))
-
-
-def test_auto_reply_dry_run_posts_nothing_and_returns_no_records():
-    http = _graph_http()
-    out = InstagramProvider().run_action("auto_reply", {"rules": RULES}, _ctx(http=http, own_username="me"))
-    assert http.posts == []
-    assert out["dry_run"] is True
-    assert out["records"] == []
-    assert out["checked"] == 3 and out["matched"] == 1 and out["sent"] == 0
-    assert [w["comment_id"] for w in out["would_send"]] == ["c1"]
-    assert out["would_send"][0]["keyword"] == "size"
-    assert {s["comment_id"]: s["reason"] for s in out["skipped"]} == {"c2": "no_match", "c3": "own_comment"}
-
-
-def test_auto_reply_real_run_sends_and_returns_records():
-    http = _graph_http()
-    out = InstagramProvider().run_action("auto_reply", {"rules": RULES, "dry_run": False, "skip_comment_ids": ["c3"]}, _ctx(http=http))
-    assert len(http.posts) == 1
-    post = http.posts[0]
-    assert post["url"] == f"{BASE}/1789/messages"
-    assert post["json"] == {"recipient": {"comment_id": "c1"}, "message": {"text": RULES[0]["reply"]}}
-    assert post["headers"] == {"Authorization": "Bearer tok"}
-    assert out["sent"] == 1 and "would_send" not in out
-    rec = out["records"][0]
-    assert rec["comment_id"] == "c1" and rec["username"] == "fan" and rec["user_id"] == "u1" and rec["keyword"] == "size" and rec["sent_at"]
-    assert rec["commenter"] == "@fan"
-    assert {"comment_id": "c3", "reason": "already_replied"} in out["skipped"]
-
-
-def test_auto_reply_send_failure_is_skipped_not_raised():
-    http = _graph_http(post_status=400)
-    out = InstagramProvider().run_action("auto_reply", {"rules": RULES, "dry_run": False}, _ctx(http=http))
-    assert out["sent"] == 0 and out["records"] == []
-    assert {"comment_id": "c1", "reason": "send_failed: HTTP 400"} in out["skipped"]
-
-
-def test_send_private_reply_posts_once():
-    http = _graph_http()
-    out = InstagramProvider().run_action("send_private_reply", {"comment_id": "c1", "text": "hi"}, _ctx(http=http))
-    assert out["sent"] is True and out["status"] == 200
-    assert http.posts[0]["json"]["recipient"] == {"comment_id": "c1"}
-    with pytest.raises(ValueError):
-        InstagramProvider().run_action("send_private_reply", {"comment_id": "c1"}, _ctx())
+        InstagramProvider().run_action("comments", {}, _ctx(http=_graph_http(get_status=500)))
 
 
 def test_refresh_token_returns_secret_update():
@@ -163,61 +117,19 @@ def test_refresh_token_returns_secret_update():
     assert "access_token=" in http.gets[0]["url"]  # Meta's refresh endpoint takes the token as a parameter, not the header
 
 
-def test_record_commenter_falls_back_to_user_id_then_comment_id():
-    from marvin_integration_instagram.provider import _record
-
-    base = {"comment_id": "c9", "media_id": "m", "keyword": "k", "reply": "r", "text": "t"}
-    assert _record({**base, "username": "", "user_id": "u9"})["commenter"] == "user u9"
-    assert _record({**base, "username": "", "user_id": ""})["commenter"] == "comment c9"
-
-
-def test_provider_declares_the_content_its_actions_depend_on():
-    """auto_reply reads rules from entries and writes a log entry per send, and the task is what
-    calls it — so these are how the integration works, not optional extras."""
+def test_provider_declares_only_the_token_refresh_task():
+    """0.8.0 stops shipping the ig-* entry types, the two Social collections and the auto-reply task."""
     content = {c.slug: c for c in InstagramProvider().content}
-    assert set(content) == {
-        "ig-auto-reply",
-        "ig-reply-log",
-        "social-auto-responses",
-        "social-sent",
-        "instagram-auto-reply",
-        "instagram-token-refresh",
-    }
-    assert {c.kind for c in content.values()} == {"entry_type", "collection", "scheduled_task"}
+    assert set(content) == {"instagram-token-refresh"}
+    task = content["instagram-token-refresh"]
+    assert task.kind == "scheduled_task" and not task.required and not task.requires
+    assert task.payload["task_config"] == {"integration": "instagram", "action": "refresh_token"}
 
 
-def test_declared_tasks_start_disabled_and_in_dry_run():
-    # Installing an integration must never start sending DMs on its own.
-    tasks = [c for c in InstagramProvider().content if c.kind == "scheduled_task"]
-    assert tasks and all(t.payload["enabled"] is False for t in tasks)
-    auto = next(t for t in tasks if t.slug == "instagram-auto-reply")
-    assert auto.payload["task_config"]["args"]["dry_run"] is True
-
-
-def test_declared_content_depends_only_on_this_integrations_own_types():
-    # A provider owns its own names; it must not reach into the workspace's content model.
-    own = {c.slug for c in InstagramProvider().content if c.kind == "entry_type"}
-    for blueprint in InstagramProvider().content:
-        for requirement in blueprint.requires:
-            kind, _, slug = requirement.partition(":")
-            assert kind == "entry_type" and slug in own, f"{blueprint.slug} requires foreign content {requirement}"
-
-
-def test_the_log_type_carries_the_dedupe_field_the_task_reads():
-    log = next(c for c in InstagramProvider().content if c.slug == "ig-reply-log")
-    fields = [f["key"] for f in log.payload["schema_json"]["fields"]]
-    assert "comment_id" in fields
-    auto = next(c for c in InstagramProvider().content if c.slug == "instagram-auto-reply")
-    assert auto.payload["task_config"]["inputs"]["skip_comment_ids"]["field"] == "comment_id"
-
-
-def test_only_what_the_actions_actually_use_is_marked_required():
-    """Calling a preference a requirement tells someone their integration is broken when it is not.
-    The entry types and the task are load-bearing; the collections and token refresh are not."""
-    content = {c.slug: c for c in InstagramProvider().content}
-    assert {s for s, c in content.items() if c.required} == {"ig-auto-reply", "ig-reply-log", "instagram-auto-reply"}
-    assert not content["social-sent"].required
-    assert not content["instagram-token-refresh"].required
+def test_the_declared_task_starts_disabled():
+    # Installing an integration must never start anything on its own.
+    (task,) = [c for c in InstagramProvider().content if c.kind == "scheduled_task"]
+    assert task.payload["enabled"] is False
 
 
 # ── what Instagram teaches Marvin (SDK 0.9.0) ────────────────────────────────
@@ -231,17 +143,17 @@ class TestInstagramContract(IntegrationContract):
 
 def test_the_guide_ships_with_the_package():
     guide = load_guide(InstagramProvider)
-    assert guide.startswith("# Instagram") and "IG Reply Log" in guide and "Publish a post" in guide
+    assert guide.startswith("# Instagram") and "Social › Instagram › Rules" in guide and "Publish a post" in guide
+    assert "ig-reply-" not in guide.split("Moving from version 0.7", 1)[0] and "`auto_reply`" not in guide.split("## Actions", 1)[1]
 
 
 def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
     # The core runs an approval-gated action only right after an approved Approval step; the guide says so and names them.
     needs_approval = {a.key for a in InstagramProvider.actions if a.requires_approval}
-    assert needs_approval == {"send_private_reply", "auto_reply", "publish_media", "post", "reply", "delete_comment"}
+    assert needs_approval == {"publish_media", "post", "reply", "delete_comment"}
     workflows = load_guide(InstagramProvider).split("## In workflows", 1)[1].split("## ", 1)[0]
     assert "Approval" in workflows and all(
-        label in workflows
-        for label in ("Publish a post", "Post to Instagram", "Send private reply", "Auto-reply", "Reply to a comment", "Delete a comment")
+        label in workflows for label in ("Publish a post", "Post to Instagram", "Reply to a comment", "Delete a comment")
     )
 
 

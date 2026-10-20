@@ -1,7 +1,7 @@
 [project]
 name = "marvin-integration-instagram"
-version = "0.7.0"
-description = "Instagram integration for Marvin — poll post comments and send keyword-triggered private replies."
+version = "0.8.0"
+description = "Instagram integration for Marvin — post, read comments, reply (privately or publicly), hide and delete them."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["marvin-integration-sdk>=0.9,<1"]

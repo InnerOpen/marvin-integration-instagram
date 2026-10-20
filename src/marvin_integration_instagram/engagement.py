@@ -1,6 +1,6 @@
 """Pure helpers for Marvin's shared social-engagement shape: normalised comment items and the poll cursor.
 
-No SDK import and no HTTP here, like ``matching.py``. The provider does the Graph calls and hands rows in.
+No SDK import and no HTTP here. The provider does the Graph calls and hands rows in.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Instagram provider: Graph API calls for comments and private replies.
+"""Instagram provider: Graph API calls for comments, replies, moderation and posting.
 
 Uses the Instagram Login flavour of the Graph API (``graph.instagram.com``) with a long-lived user
 token. A *private reply* is one DM per comment, allowed within 7 days of the comment; Meta rejects a
@@ -30,7 +30,6 @@ from marvin_integration_sdk import (
 
 from .content import CONTENT
 from .engagement import DEFAULT_LIMIT, KIND_COMMENT, KIND_MENTION, KIND_REPLY, KINDS, NETWORK, decode_cursor, page_after, to_item
-from .matching import match_rules
 
 DEFAULT_API_VERSION = "v22.0"
 DEFAULT_LOOKBACK_MEDIA = 10
@@ -86,37 +85,18 @@ def _refusal(urls: list[str], caption: str) -> str | None:
     return None
 
 
-def _record(match: dict) -> dict:
-    """The persisted shape of one match. `commenter` is the best available handle: the username
-    when Meta gives it, otherwise the user id, otherwise the comment id."""
-    username, user_id = match.get("username") or "", match.get("user_id") or ""
-    commenter = f"@{username}" if username else (f"user {user_id}" if user_id else f"comment {match['comment_id']}")
-    return {
-        "comment_id": match["comment_id"],
-        "media_id": match["media_id"],
-        "username": username,
-        "user_id": user_id,
-        "commenter": commenter,
-        "keyword": match["keyword"],
-        "reply": match["reply"],
-        "text": match["text"],
-    }
-
-
 @register_provider
 class InstagramProvider(IntegrationProvider):
     slug = "instagram"
     name = "Instagram"
-    description = (
-        "Poll comments on your recent posts, reply (privately or publicly), hide and delete them, and send keyword-triggered private replies (DMs)."
-    )
+    description = "Post to Instagram, and read, reply to (privately or publicly), hide and delete the comments on your posts. Keyword auto-replies are Social's, in Marvin."
     category = CATEGORY_DESTINATION
     icon = "📸"
     logo = "logo.png"
 
     # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here, and one
     # ready-made workflow in the Workflow Library, offered once Instagram is connected: post the main picture on publish,
-    # after an editor approves. (The reply actions stay with the scheduled task; the rules, log and collections are blueprints.)
+    # after an editor approves. (Comments and replies are Social's: Marvin's own rules and auto-reply use the `comments` and `reply` actions.)
     guide = "guide.md"
     recipes = (
         WorkflowRecipe(
@@ -225,42 +205,6 @@ class InstagramProvider(IntegrationProvider):
     }
 
     actions = (
-        ProviderAction(
-            key="list_recent_comments",
-            label="List recent comments",
-            description="Comments on your most recent posts.",
-            input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}, "additionalProperties": False},
-        ),
-        ProviderAction(
-            key="send_private_reply",
-            label="Send private reply",
-            description="DM the author of one comment (once per comment, within 7 days).",
-            input_schema={
-                "type": "object",
-                "properties": {"comment_id": {"type": "string"}, "text": {"type": "string"}},
-                "required": ["comment_id", "text"],
-                "additionalProperties": False,
-            },
-            requires_approval=True,
-        ),
-        ProviderAction(
-            key="auto_reply",
-            label="Auto-reply to keyword comments",
-            description="Match recent comments against keyword rules and send the configured reply (dry-run by default).",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "rules": {"type": "array", "items": {"type": "object"}},
-                    "dry_run": {"type": "boolean", "default": True},
-                    "skip_comment_ids": {"type": "array", "items": {"type": "string"}},
-                    "max_age_days": {"type": "integer", "default": DEFAULT_MAX_AGE_DAYS},
-                },
-                "required": ["rules"],
-                "additionalProperties": False,
-            },
-            cost_hint="free",
-            requires_approval=True,
-        ),
         ProviderAction(
             key="refresh_token",
             label="Refresh access token",
@@ -557,9 +501,6 @@ class InstagramProvider(IntegrationProvider):
 
     def run_action(self, key: str, args: dict, ctx: IntegrationContext) -> dict:
         handler = {
-            "list_recent_comments": self._action_list_recent_comments,
-            "send_private_reply": self._action_send_private_reply,
-            "auto_reply": self._action_auto_reply,
             "refresh_token": self._action_refresh_token,
             "publish_media": self._action_publish_media,
             "post": self._action_post,
@@ -574,53 +515,6 @@ class InstagramProvider(IntegrationProvider):
         return handler(args or {}, ctx)
 
     # ---- actions ----------------------------------------------------------------------------
-
-    def _action_list_recent_comments(self, args: dict, ctx: IntegrationContext) -> dict:
-        comments = self._recent_comments(ctx)
-        limit = args.get("limit")
-        if limit:
-            comments = comments[: int(limit)]
-        return {"comments": [{**c, "timestamp": c["timestamp"].isoformat() if c["timestamp"] else None} for c in comments]}
-
-    def _action_send_private_reply(self, args: dict, ctx: IntegrationContext) -> dict:
-        comment_id, text = args.get("comment_id"), args.get("text")
-        if not comment_id or not text:
-            raise ValueError("send_private_reply needs 'comment_id' and 'text'.")
-        resp = self._send(ctx, str(comment_id), str(text))
-        return {"sent": resp.ok, "status": resp.status_code, "response": resp.text[:500]}
-
-    def _action_auto_reply(self, args: dict, ctx: IntegrationContext) -> dict:
-        dry_run = bool(args.get("dry_run", True))
-        rules = args.get("rules") or []
-        skip_ids = {str(i) for i in (args.get("skip_comment_ids") or []) if i}
-        own = self._cfg(ctx).get("own_username")
-        comments = self._recent_comments(ctx)
-        matches, skipped = match_rules(
-            comments,
-            rules,
-            now=datetime.now(UTC),
-            max_age_days=int(args.get("max_age_days") or DEFAULT_MAX_AGE_DAYS),
-            skip_ids=skip_ids,
-            skip_usernames={own} if own else set(),
-        )
-
-        result = {"checked": len(comments), "matched": len(matches), "sent": 0, "dry_run": dry_run, "records": [], "skipped": skipped}
-        if dry_run:
-            # Nothing persisted on a dry run: `records` stays empty so the core never logs a reply
-            # that was not actually sent (a logged comment id blocks a real send later).
-            result["would_send"] = [_record(m) for m in matches]
-            return result
-
-        for m in matches:
-            resp = self._send(ctx, m["comment_id"], m["reply"])
-            if not resp.ok:
-                # A failed send is reported, never raised — one bad comment must not abort the run.
-                ctx.logger.warning("instagram: private reply to %s failed: HTTP %s %s", m["comment_id"], resp.status_code, resp.text[:200])
-                skipped.append({"comment_id": m["comment_id"], "reason": f"send_failed: HTTP {resp.status_code}"})
-                continue
-            result["sent"] += 1
-            result["records"].append({**_record(m), "sent_at": datetime.now(UTC).isoformat()})
-        return result
 
     def _action_refresh_token(self, args: dict, ctx: IntegrationContext) -> dict:
         # Unlike the Graph calls, Meta's refresh endpoint ignores the Authorization header and wants the token as
@@ -805,7 +699,7 @@ class InstagramProvider(IntegrationProvider):
             raise _unsupported("That comment is from your own account; there is nobody to send a private reply to.")
 
     def _action_reply(self, args: dict, ctx: IntegrationContext) -> dict:
-        """The `social.reply` capability: a private reply (the DM `send_private_reply` sends) or, with private=false, a
+        """The `social.reply` capability: a private reply (a DM to the commenter) or, with private=false, a
         public reply under the comment. The approval step before it is the gate, so a real send is the default."""
         comment_id, text = str(args.get("comment_id") or "").strip(), str(args.get("text") or "").strip()
         if not comment_id or not text:

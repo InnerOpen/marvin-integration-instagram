@@ -1,16 +1,14 @@
 # Instagram
 
-Reads the comments on your recent Instagram posts and answers matching ones with a **private reply** (a DM to the
-commenter). Keyword rules are ordinary Marvin entries; a scheduled task polls every 2 minutes and sends the replies.
-It talks to the Instagram Login flavour of the Graph API (`graph.instagram.com`). It posts pictures to the feed
-(and carousels), and it takes part in Marvin's shared **social engagement**: read comments and replies, reply
-privately or publicly, hide and delete comments (see the last four actions below). It cannot like a comment, repost,
-or message someone who has not commented.
+Posts to Instagram, and reads, answers, hides and deletes the comments on your posts. It talks to the Instagram Login
+flavour of the Graph API (`graph.instagram.com`). It posts pictures to the feed (and carousels), and it takes part in
+Marvin's shared **social engagement**: read comments and replies, reply privately or publicly, hide and delete comments
+(see the actions below). It cannot like a comment, repost, or message someone who has not commented.
 
-**The shared engine will take over auto-reply.** Marvin core's shared auto-reply engine reads comments and replies
-through those four actions on every connected network. Once it is switched on for Instagram, this plugin's own
-**Instagram auto-reply** task is turned off (not deleted); until then the task keeps working as described here. The
-`ig-auto-reply` rules and `ig-reply-log` entries carry over, so nothing is answered twice.
+**Keyword rules and auto-reply are Marvin's Social.** Write the rules under **Social › Instagram › Rules** and switch the
+auto-reply (off, rehearsal, on) on that page: Marvin's engine reads comments through this plugin's `comments` action and
+answers through `reply`. This plugin has no rules, reply log or auto-reply task of its own since 0.8.0 (version 0.7 had
+them, with the `list_recent_comments`, `send_private_reply` and `auto_reply` actions; those are gone too).
 
 ## Connect it
 
@@ -21,10 +19,9 @@ through those four actions on every connected network. Once it is switched on fo
    **Instagram user ID**. Save: the card should turn `ok` (Marvin checks the token by reading `/me`).
 3. Optional settings: **Own username** (comments by this account are never answered), **Posts to scan** (how many of
    your latest posts to read comments from; default 10), **Graph API version** (default `v22.0`).
-4. The integration declares the content it needs: two entry types (**IG Auto-Reply Rule**, **IG Reply Log**), two
-   smart collections (**Social — Auto-Responses**, **Social — Sent**) and two scheduled tasks (**Instagram
-   auto-reply**, **Instagram token refresh**). Apply them from the integration card. Both tasks arrive **disabled**,
-   and the auto-reply task arrives in **dry-run**.
+4. The integration declares one piece of content: the **Instagram token refresh** scheduled task. Apply it from the
+   integration card; it arrives **disabled**. Enable it once the card reads `ok`: it runs every 30 days and Marvin
+   stores the new token (the token expires after 60 days if it is never refreshed).
 
 **Reach.** Under Meta *Standard Access* a private reply only reaches accounts that hold a role on your Meta app
 (admins, developers, testers). Replying to the public needs *Advanced Access* (App Review and Business
@@ -38,43 +35,18 @@ generate a new one with all of them.
 
 ## Set up auto-reply
 
-1. Create an **IG Auto-Reply Rule** entry: **Keywords** (comma-separated), **Reply DM**, and optionally **Post ID**
-   (a media id; leave it empty or `*` for every post). **Publish** it: draft rules do nothing.
-2. Enable the **Instagram auto-reply** task. In dry-run it sends nothing and logs nothing: its run history reports what
-   matched. When that looks right, set the task's `args.dry_run` to `false`.
-3. Every real send creates an **IG Reply Log** entry (slug `ig-reply-<comment id>`). The log is the memory: the task
-   passes the logged comment ids back as `skip_comment_ids`, so a comment is never answered twice. Deleting a log entry
-   makes its comment eligible again (until it is older than 7 days).
-4. Enable **Instagram token refresh** once the card reads `ok`. It runs every 30 days and Marvin stores the new
-   token. The token expires after 60 days if it is never refreshed.
+In Marvin, not here: open **Social › Instagram**, write and publish a rule under **Rules** (keywords, the reply, private
+or public), then set the network's auto-reply to **rehearsal** (it records what it would send) and, when that looks
+right, **on**. The Social page of Marvin's manual has the matching rules and the limits. Under Meta Standard Access a private reply
+only reaches accounts that hold a role on your Meta app (see **Reach**), and one DM per comment is all Meta allows,
+within 7 days of the comment.
 
-### How rules match
-
-- A keyword matches as a **whole word**, case-insensitively; multi-word keywords work (`price list`). `size` matches
-  "What SIZE is this?" but not "sizes".
-- **One reply per comment** (Meta allows one). If a comment matches several rules: a rule for that specific post beats
-  a `*` rule, and otherwise the rule written first wins.
-- A rule without keywords or without a reply is ignored.
-- Skipped comments are reported with a reason: `already_replied` (in the log), `too_old` (older than `max_age_days`,
-  default 7, the window Meta allows), `own_comment` (the **Own username** setting), `no_match`.
-- Meta withholds `username` for commenters who have no role on the app. The log's title then falls back to the user
-  id, then the comment id.
+**Moving from version 0.7:** the old **IG Auto-Reply Rule** / **IG Reply Log** entries, the two "Social —" collections and
+the **Instagram auto-reply** task were removed from Marvin workspaces by a Marvin migration, and Marvin no longer reads
+them. Write the rules again under Social › Instagram › Rules.
 
 ## Actions
 
-- **List recent comments** (`list_recent_comments`): `limit` (optional). Returns `{"comments": [...]}`, each with
-  `comment_id`, `media_id`, `username` (may be empty), `user_id`, `text` and `timestamp` (ISO 8601, or null). It reads
-  the latest *Posts to scan* posts, at most 50 comments per post (no further pages), and `limit` trims the combined
-  list afterwards.
-- **Send private reply** (`send_private_reply`): `comment_id`, `text`. DMs the author of one comment, once per
-  comment, within 7 days of it. Returns `{"sent": bool, "status": <HTTP status>, "response": <Meta's reply, first 500
-  characters>}`. A refusal from Meta comes back as `sent: false`, it is not raised.
-- **Auto-reply to keyword comments** (`auto_reply`): `rules` (required: a list of `{post_id, keywords, reply}`),
-  `dry_run` (default `true`), `skip_comment_ids`, `max_age_days` (default 7). Returns `checked`, `matched`, `sent`,
-  `dry_run`, `skipped` and, for real sends, `records`; a dry run returns `would_send` and no `records`. In practice
-  the scheduled task supplies `rules` from the published rule entries and `skip_comment_ids` from the log. A send
-  that Meta refuses is listed in `skipped` as `send_failed: HTTP <n>` and does not stop the run. It is not logged,
-  so it is tried again on the next run until the comment is too old.
 - **Read comments and replies** (`comments`, capability `social.comments`): `since` (the `cursor` from the last call,
   opaque; leave it out the first time), `limit` (default 50), `kinds` (any of `comment`, `reply`, `mention`).
   Returns `{"items": [...], "cursor": "..."}`, items oldest first, each `{id, kind, post_id, post_url, author:
@@ -115,22 +87,18 @@ generate a new one with all of them.
 
 ## In workflows
 
-- **Publish a post**, **Post to Instagram**, **Send private reply**, **Auto-reply**, **Reply to a comment** and
+- **Publish a post**, **Post to Instagram**, **Reply to a comment** and
   **Delete a comment** require approval: a workflow may run them only right
   after an **Approval** step that was approved (the step refuses otherwise). The usual post: trigger
   `entry_published` → Approval "Post “${entry.title}” to Instagram?" → a `media` step `convert` to `jpeg` with
   `source: ${entry.image}` (the feed takes JPEG only; the copy is kept as a derived asset) → Run integration
   `publish_media` with `image_url: ${steps.<media id>.output.asset.url}`, `caption: ${entry.summary}`,
   `dry_run: false` → an entry step that sets `instagram_permalink` from `${steps.<id>.output.permalink}`. The
-  plugin ships this as the **Post to Instagram when published** recipe. Keyword replies still go out through the scheduled
-  task until Marvin's shared auto-reply engine is switched on for Instagram; don't build a workflow that polls comments
-  to reply to the same keywords, or a comment could be answered twice.
+  plugin ships this as the **Post to Instagram when published** recipe. Keyword replies are Social's auto-reply: don't
+  build a workflow that polls comments to reply to the same keywords, or a comment could be answered twice.
 - **Read comments and replies** gives a workflow new comments without repeats: keep the `cursor` from one run and pass
-  it as `since` in the next (the shared engine does exactly this). **Hide a comment** needs no approval, so a workflow
+  it as `since` in the next (Marvin's Social engine does exactly this). **Hide a comment** needs no approval, so a workflow
   can hide spam after an AI classification; **Reply to a comment** and **Delete a comment** come after an Approval step.
-- A workflow can call **List recent comments**, for example to read comments on a schedule. The result is
-  `$steps.<id>.output.comments`. Every run re-reads the same recent comments (nothing marks one as seen), so
-  de-duplicate on `comment_id` if the workflow acts on them.
 - Don't call **Refresh access token** from a workflow: the new token would not be stored. Use the scheduled task.
 - The integration emits no events and receives no webhooks. Marvin finds new comments only by polling.
 
@@ -142,7 +110,7 @@ generate a new one with all of them.
   wait).
 - Send a second DM to the same comment, or reply to a comment older than 7 days.
 - Send DMs to people who commented but are not allowed under your app's access level (see **Reach**).
-- React instantly: new comments are picked up on the next poll (every 2 minutes).
+- React instantly: new comments are picked up on Marvin's next poll (every 5 minutes).
 - Read more than the latest *Posts to scan* posts, or more than 50 comments of one post.
 
 ## When it fails
@@ -157,7 +125,7 @@ nothing is retried automatically. The messages:
   comment, only `mention` asked of **Read comments and replies**, or an unknown comment kind.
 - **`invalid_cursor`**: `since` is not a cursor this plugin returned; start again without it.
 - **"Instagram did not return a refreshed access token."**: the refresh call succeeded but carried no token.
-- **`send_failed: HTTP <n>`** in `skipped`, or `sent: false`: Meta refused one DM (for example a comment that already
-  has a reply, one past the 7-day window, or an account without a role on the app under Standard Access).
+- **A private `reply` Meta refuses** is raised with Meta's message (for example a comment that already has a reply, one past
+  the 7-day window, or an account without a role on the app under Standard Access).
 - The card shows **unconfigured** when the token or the Instagram user ID is missing, and **error** with the HTTP
   status when `/me` is refused or unreachable.

@@ -99,9 +99,9 @@ def test_the_capabilities_are_declared_on_the_new_actions_with_the_right_gates()
     assert not {"social.like", "social.repost", "social.message"} & set(by_cap)
 
 
-def test_the_existing_actions_are_still_there_and_unchanged_in_approval():
+def test_the_remaining_actions_and_their_approval():
     keys = {a.key: a.requires_approval for a in InstagramProvider.actions}
-    assert keys["list_recent_comments"] is False and keys["send_private_reply"] is True and keys["auto_reply"] is True
+    assert not {"list_recent_comments", "send_private_reply", "auto_reply"} & set(keys)
     assert keys["refresh_token"] is False and keys["publish_media"] is True and keys["post"] is True
 
 

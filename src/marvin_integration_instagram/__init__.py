@@ -1,6 +1,6 @@
-"""Instagram integration for Marvin — comments in, keyword-triggered private replies out."""
+"""Instagram integration for Marvin — post, read and answer comments, moderate them."""
 
 from .provider import InstagramProvider
 
 __all__ = ["InstagramProvider"]
-__version__ = "0.7.0"
+__version__ = "0.8.0"
