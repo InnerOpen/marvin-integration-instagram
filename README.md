@@ -2,7 +2,8 @@
 
 A [Marvin](https://github.com/InnerOpen/marvin) integration that polls the comments on your recent
 Instagram posts and sends **private replies** (DMs) when a comment matches a keyword rule.
-Category: *destination*.
+Category: *destination*. It also implements Marvin's shared **social engagement** capabilities (read comments, reply
+privately or publicly, hide, delete), which the shared auto-reply engine in Marvin core uses on every network.
 
 The rules are ordinary Marvin content: an `ig-auto-reply` entry holds a post id (or `*`), a list of
 keywords and the reply text, and only `published` rules apply. Every real send is recorded as an
@@ -47,6 +48,7 @@ No changes to Marvin core or its frontend. Marvin discovers the provider through
 | **Action** | `auto_reply` — `{ "rules", "dry_run": true, "skip_comment_ids"?, "max_age_days": 7 }` → `{ "checked", "matched", "sent", "dry_run", "would_send"? , "records", "skipped" }` |
 | **Action** | `refresh_token` — `{}` → `{ "expires_in", "secret_update" }` (the core stores the new token) |
 | **Action** | `post` — the shared **`social.post`** capability, see below |
+| **Action** | `comments`, `reply`, `hide`, `delete_comment` — the shared **`social.comments`**, **`social.reply`**, **`social.hide`**, **`social.delete_comment`** capabilities, see [Shared engagement](#shared-engagement-capabilities) |
 | **Action** | `publish_media` — `{ "image_url" | "image_urls": [2–10], "caption"?, "dry_run": true }` → dry run `{ "would_publish", "quota" }`; real `{ "published", "media_id", "permalink", "images", "quota" }` (JPEG from a public https URL; approval-gated) |
 
 ### `post` — the shared `social.post` capability
@@ -77,15 +79,92 @@ instead so nothing gets logged. A record is
 comment id, giving the log entry a usable title either way. A failed send lands in `skipped` as `send_failed: HTTP n` — it never
 aborts the run.
 
-## What it teaches Marvin (0.6.0, SDK 0.9.0)
+## Shared engagement capabilities
+
+Marvin core's shared auto-reply engine reads comments and replies through these capabilities, on every connected
+network. Each sits on one new action and reuses the plugin's existing Graph calls; the existing actions
+(`list_recent_comments`, `send_private_reply`, `auto_reply`, `publish_media`, `post`, `refresh_token`) and the
+blueprints are unchanged.
+
+| Capability | Action | Gated | Arguments → output | Graph call |
+|---|---|---|---|---|
+| `social.comments` | `comments` | no | `{ since?, limit?: 50, kinds?: ["comment","reply","mention"] }` → `{ items, cursor }` | `GET /me/media?fields=id,timestamp,permalink`, then `GET /{media-id}/comments?fields=…,replies{…}` per post |
+| `social.reply` | `reply` | **yes** | `{ comment_id, text, private: true, dry_run: false }` → `{ replied, reply_id, private, url, network }` (+ `would_reply` on a dry run) | private: `GET /{comment-id}?fields=id,timestamp,username` (window check), then `POST /{ig-user-id}/messages` with `recipient.comment_id`; public: `POST /{comment-id}/replies` with `message` |
+| `social.hide` | `hide` | no | `{ comment_id, hidden: true }` → `{ hidden, network }` | `POST /{comment-id}?hide=true\|false` |
+| `social.delete_comment` | `delete_comment` | **yes** | `{ comment_id }` → `{ deleted, network }` | `DELETE /{comment-id}` |
+
+Not declared, because Instagram's API has no such call: `social.like` (no way to like a comment), `social.repost`, and
+`social.message` (a DM is possible only as a reply to a comment, which is `social.reply` with `private: true`).
+
+**`social.comments`.** An item is `{ id, kind, post_id, post_url, author: { id, handle, name }, text, created_at (ISO
+UTC), url, network: "instagram" }`, oldest to newest. `kind` is `comment` for a top-level comment and `reply` for a
+reply under one (the first page of replies per comment). `name` repeats `handle`: Instagram gives a commenter no
+display name; `id` and `handle` can be empty when Meta withholds them from commenters without a role on the app.
+The `cursor` is opaque (it encodes the newest `created_at` returned plus the ids sharing that second); pass it back as
+`since` and only newer items come back. With no `since` the newest `limit` items return; with one, the oldest `limit`
+new items, so a backlog drains in order and nothing is skipped. A bad cursor raises `invalid_cursor`.
+**Mentions are skipped:** the Graph API reports @mentions in comments only through webhooks, which Marvin does not
+receive, so `kinds` containing `mention` is accepted and yields nothing for it, and asking for *only* mentions is
+refused (`unsupported`).
+
+**`social.reply`.** `private: true` (the default) is the existing private reply, sent by the same code as
+`send_private_reply`, with the checks it implies plus the window now enforced up front: a comment older than 7 days,
+or from the account's own `own_username`, is refused with `unsupported` before anything is sent (also on a dry run).
+`private: false` is a public reply in the thread (no window). Unlike `send_private_reply`, a failure from Meta is
+raised, never returned as `replied: false`. `url` is null: the API gives a reply no link. `dry_run` checks the same
+things and returns `replied: false` and `would_reply`; the real send is the default, since the approval step before it
+is the gate. Meta's own one-reply-per-comment limit is not pre-checked; Meta's rejection is raised.
+
+Refusals the plugin knows about use `IntegrationError` with code `unsupported`.
+
+**The plugin's own auto-reply.** Once the shared engine is switched on for Instagram in Marvin, it replaces this
+plugin's **Instagram auto-reply** scheduled task, which is then turned off (not deleted). Until then the task, the
+`auto_reply` action, the `ig-auto-reply` rules and the `ig-reply-log` entries keep working exactly as before; the
+shared engine reads the same rules and log, so nothing is answered twice.
+
+### Token permissions
+
+Instagram Login scopes (verify the exact names and which combination each call needs in the Meta App Dashboard):
+
+| Call | Scope |
+|---|---|
+| list posts, read the account (`check`) | `instagram_business_basic` |
+| read comments and replies (`comments`, `list_recent_comments`) | `instagram_business_basic`, `instagram_business_manage_comments` |
+| public reply, hide, delete comment | `instagram_business_manage_comments` |
+| private reply (DM) | `instagram_business_manage_messages` (and `instagram_business_manage_comments` to read the comment) |
+| `post`, `publish_media` | `instagram_business_content_publish` |
+
+A token made for 0.6.0 may lack `instagram_business_manage_comments` or `instagram_business_manage_messages`; generate
+a new one with all of the above. The Standard Access limits (accounts with a role on your app only) apply to replies.
+
+### Verify against Meta's docs
+
+These are written from the Graph API reference as remembered, with no live call made; check them against your
+`api_version` before relying on them:
+
+- The scope names above, and exactly which scope each call needs (especially the private reply and the `hide` call).
+- `POST /{comment-id}?hide=true|false` and `DELETE /{comment-id}` on `graph.instagram.com` with an Instagram Login
+  token, the `{ "success": true }` response, and that deleting works on your own replies as well as on comments under
+  your posts.
+- `POST /{comment-id}/replies` takes `message` as a form parameter and returns `{ "id" }`.
+- The `replies{…}` field expansion on `/{media-id}/comments`, and that a reply node has the same fields (`username`,
+  `from`, `timestamp`) as a comment.
+- The `url` of an item is built as `<post permalink>c/<id>/` (and `c/<parent>/r/<id>/` for a reply): that is the
+  instagram.com web shape, not documented by Meta. It is null when Meta gives no `permalink`.
+- That mentions in comments are webhook-only (no polling edge); `GET /{ig-user-id}/tags` lists posts you are tagged
+  in, which is a different thing.
+- Whether Meta limits a private reply to top-level comments only (replies to a reply are not pre-checked), and the
+  length limits on a comment and on a DM (not pre-checked; Meta's rejection is raised).
+
+## What it teaches Marvin (0.7.0, SDK 0.9.0)
 
 - **A guide** (`src/marvin_integration_instagram/guide.md`): connecting the Meta token, setting up and publishing
   rules, how keywords match, what each action returns, what workflows can and cannot run (replies need approval, so
   only the scheduled task sends them), and what each failure message means. Marvin's agents read it when building
   workflows where Instagram is connected, and Marvin's manual search finds it.
-- **No recipes**, on purpose: the reply actions cannot run from a workflow, the only workflow-callable read
-  (`list_recent_comments`) has no way to mark a comment as seen, and the rule/log types, collections and scheduled
-  tasks are already declared as blueprints.
+- **No new recipes**, on purpose: the shared engagement flows (read, auto-reply, moderate) belong to Marvin core's
+  shared engine and its `social.*` workflow steps, and the rule/log types, collections and scheduled tasks are already
+  declared as blueprints. The one recipe is the post-on-publish workflow.
 
 ## Logo
 

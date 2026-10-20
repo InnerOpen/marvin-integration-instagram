@@ -13,7 +13,7 @@ comments were already answered, the reply log — is the core's job and arrives 
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 from urllib.parse import urlencode
 
@@ -29,6 +29,7 @@ from marvin_integration_sdk import (
 )
 
 from .content import CONTENT
+from .engagement import DEFAULT_LIMIT, KIND_COMMENT, KIND_MENTION, KIND_REPLY, KINDS, NETWORK, decode_cursor, page_after, to_item
 from .matching import match_rules
 
 DEFAULT_API_VERSION = "v22.0"
@@ -36,6 +37,10 @@ DEFAULT_LOOKBACK_MEDIA = 10
 DEFAULT_MAX_AGE_DAYS = 7
 COMMENTS_PAGE_SIZE = 50
 COMMENT_FIELDS = "id,text,username,timestamp,from"
+# The shared `social.comments` read also wants each post's permalink and the replies under each comment.
+MEDIA_FIELDS = "id,timestamp"
+MEDIA_FIELDS_WITH_LINK = "id,timestamp,permalink"
+COMMENT_FIELDS_WITH_REPLIES = f"{COMMENT_FIELDS},replies{{{COMMENT_FIELDS}}}"
 # Publishing: a container is created, Meta fetches and processes the picture, then it is published.
 PUBLISH_POLL_SECONDS = 2
 PUBLISH_WAIT_SECONDS = 60
@@ -55,6 +60,19 @@ def _parse_ts(value: str | None) -> datetime | None:
             return datetime.fromisoformat(value)
         except ValueError:
             return None
+
+
+def _flag(value, default: bool) -> bool:
+    """A boolean argument. Workflow templates can hand over "false" as text, which bool() would read as true."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "off")
+    return bool(value)
+
+
+def _unsupported(message: str) -> IntegrationError:
+    return IntegrationError(message, code="unsupported")
 
 
 def _refusal(urls: list[str], caption: str) -> str | None:
@@ -89,7 +107,9 @@ def _record(match: dict) -> dict:
 class InstagramProvider(IntegrationProvider):
     slug = "instagram"
     name = "Instagram"
-    description = "Poll comments on your recent posts and send keyword-triggered private replies (DMs)."
+    description = (
+        "Poll comments on your recent posts, reply (privately or publicly), hide and delete them, and send keyword-triggered private replies (DMs)."
+    )
     category = CATEGORY_DESTINATION
     icon = "📸"
     logo = "logo.png"
@@ -317,6 +337,127 @@ class InstagramProvider(IntegrationProvider):
             cost_hint="free",
             requires_approval=True,
         ),
+        ProviderAction(
+            key="comments",
+            label="Read comments and replies",
+            description=(
+                "Marvin's shared social comments read: new comments and replies on your recent posts since a cursor, oldest first. "
+                "Pass back the cursor from the last call as `since`."
+            ),
+            capability="social.comments",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "since": {"type": "string", "description": "The cursor this action returned last time (opaque); omit on the first call."},
+                    "limit": {"type": "integer", "default": DEFAULT_LIMIT, "minimum": 1},
+                    "kinds": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": list(KINDS)},
+                        "description": "comment, reply, mention. Instagram has no way to poll mentions, so that kind returns nothing.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "kind": {"type": "string", "enum": [KIND_COMMENT, KIND_REPLY, KIND_MENTION]},
+                                "post_id": {"type": "string"},
+                                "post_url": {"type": ["string", "null"]},
+                                "author": {
+                                    "type": "object",
+                                    "properties": {"id": {"type": "string"}, "handle": {"type": "string"}, "name": {"type": "string"}},
+                                },
+                                "text": {"type": "string"},
+                                "created_at": {"type": "string", "description": "ISO 8601, UTC."},
+                                "url": {"type": ["string", "null"]},
+                                "network": {"type": "string", "const": NETWORK},
+                            },
+                        },
+                    },
+                    "cursor": {"type": "string"},
+                },
+            },
+            cost_hint="free",
+        ),
+        ProviderAction(
+            key="reply",
+            label="Reply to a comment",
+            description=(
+                "Marvin's shared social reply: a private reply (a DM to the commenter, once per comment, within 7 days) by default, "
+                "or a public reply under the comment."
+            ),
+            capability="social.reply",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "comment_id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "private": {"type": "boolean", "default": True, "description": "true: DM the commenter; false: reply in the thread."},
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Check the reply and report what would be sent, sending nothing.",
+                    },
+                },
+                "required": ["comment_id", "text"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "replied": {"type": "boolean"},
+                    "reply_id": {"type": ["string", "null"]},
+                    "private": {"type": "boolean"},
+                    "url": {"type": ["string", "null"]},
+                    "network": {"type": "string", "const": NETWORK},
+                    "would_reply": {"type": "object", "description": "A dry run only: what would be sent."},
+                },
+            },
+            cost_hint="free",
+            requires_approval=True,
+        ),
+        ProviderAction(
+            key="hide",
+            label="Hide or unhide a comment",
+            description="Marvin's shared social hide: hide a comment under your own post (or show it again).",
+            capability="social.hide",
+            input_schema={
+                "type": "object",
+                "properties": {"comment_id": {"type": "string"}, "hidden": {"type": "boolean", "default": True}},
+                "required": ["comment_id"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"hidden": {"type": "boolean"}, "network": {"type": "string", "const": NETWORK}},
+            },
+            cost_hint="free",
+        ),
+        ProviderAction(
+            key="delete_comment",
+            label="Delete a comment",
+            description="Marvin's shared social delete: permanently delete a comment under your own post, or one of your own replies.",
+            capability="social.delete_comment",
+            input_schema={
+                "type": "object",
+                "properties": {"comment_id": {"type": "string"}},
+                "required": ["comment_id"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"deleted": {"type": "boolean"}, "network": {"type": "string", "const": NETWORK}},
+            },
+            cost_hint="free",
+            requires_approval=True,
+        ),
     )
 
     # ---- plumbing ---------------------------------------------------------------------------
@@ -343,37 +484,57 @@ class InstagramProvider(IntegrationProvider):
         if not ctx.secret:
             raise ValueError("No Instagram access token configured.")
 
-    def _get_json(self, ctx: IntegrationContext, url: str) -> dict:
-        resp = ctx.http.get(url, headers=self._auth(ctx))
+    @staticmethod
+    def _json_or_raise(resp) -> dict:
         if not resp.ok:
             raise ValueError(f"Instagram API error: HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:  # an empty or non-JSON body on a success status
+            return {}
+
+    def _get_json(self, ctx: IntegrationContext, url: str) -> dict:
+        return self._json_or_raise(ctx.http.get(url, headers=self._auth(ctx)))
 
     # ---- Graph calls ------------------------------------------------------------------------
 
-    def _list_media(self, ctx: IntegrationContext) -> list[dict]:
-        url = f"{self._base(ctx)}/me/media?fields=id,timestamp&limit={self._lookback(ctx)}"
+    def _list_media(self, ctx: IntegrationContext, fields: str = MEDIA_FIELDS) -> list[dict]:
+        url = f"{self._base(ctx)}/me/media?fields={fields}&limit={self._lookback(ctx)}"
         return self._get_json(ctx, url).get("data") or []
 
-    def _list_comments(self, ctx: IntegrationContext, media_id: str) -> list[dict]:
-        url = f"{self._base(ctx)}/{media_id}/comments?fields={COMMENT_FIELDS}&limit={COMMENTS_PAGE_SIZE}"
+    @staticmethod
+    def _comment_row(c: dict, media_id: str, parent_id: str | None = None) -> dict:
         # Meta withholds `username` for commenters without a role on the app; `from.id` usually survives.
-        return [
-            {
-                "comment_id": str(c.get("id")),
-                "media_id": str(media_id),
-                "username": c.get("username") or "",
-                "user_id": str((c.get("from") or {}).get("id") or ""),
-                "text": c.get("text") or "",
-                "timestamp": _parse_ts(c.get("timestamp")),
-            }
-            for c in self._get_json(ctx, url).get("data") or []
-        ]
+        row = {
+            "comment_id": str(c.get("id")),
+            "media_id": str(media_id),
+            "username": c.get("username") or "",
+            "user_id": str((c.get("from") or {}).get("id") or ""),
+            "text": c.get("text") or "",
+            "timestamp": _parse_ts(c.get("timestamp")),
+        }
+        return {**row, "parent_id": parent_id} if parent_id else row
 
-    def _recent_comments(self, ctx: IntegrationContext) -> list[dict]:
+    def _list_comments(self, ctx: IntegrationContext, media_id: str, *, replies: bool = False) -> list[dict]:
+        """A post's comments. With `replies`, the replies under each comment follow it, marked with `parent_id`
+        (only the first page of replies per comment, as with the comments themselves)."""
+        fields = COMMENT_FIELDS_WITH_REPLIES if replies else COMMENT_FIELDS
+        url = f"{self._base(ctx)}/{media_id}/comments?fields={fields}&limit={COMMENTS_PAGE_SIZE}"
+        rows: list[dict] = []
+        for c in self._get_json(ctx, url).get("data") or []:
+            rows.append(self._comment_row(c, media_id))
+            if replies:
+                rows.extend(self._comment_row(r, media_id, str(c.get("id"))) for r in (c.get("replies") or {}).get("data") or [])
+        return rows
+
+    def _recent_comments(self, ctx: IntegrationContext, *, thread: bool = False) -> list[dict]:
+        """Comments on the latest posts. With `thread`, replies come too and each row carries its post's permalink."""
         comments: list[dict] = []
-        for media in self._list_media(ctx):
-            comments.extend(self._list_comments(ctx, str(media.get("id"))))
+        for media in self._list_media(ctx, MEDIA_FIELDS_WITH_LINK if thread else MEDIA_FIELDS):
+            rows = self._list_comments(ctx, str(media.get("id")), replies=thread)
+            if thread:
+                rows = [{**r, "post_url": media.get("permalink")} for r in rows]
+            comments.extend(rows)
         return comments
 
     def _send(self, ctx: IntegrationContext, comment_id: str, text: str):
@@ -402,6 +563,10 @@ class InstagramProvider(IntegrationProvider):
             "refresh_token": self._action_refresh_token,
             "publish_media": self._action_publish_media,
             "post": self._action_post,
+            "comments": self._action_comments,
+            "reply": self._action_reply,
+            "hide": self._action_hide,
+            "delete_comment": self._action_delete_comment,
         }.get(key)
         if handler is None:
             raise NotImplementedError(f"instagram has no action '{key}'")
@@ -478,10 +643,7 @@ class InstagramProvider(IntegrationProvider):
 
     def _post_form(self, ctx: IntegrationContext, url: str, form: dict) -> dict:
         headers = {**self._auth(ctx), "Content-Type": "application/x-www-form-urlencoded"}
-        resp = ctx.http.post(url, data=urlencode(form).encode(), headers=headers)
-        if not resp.ok:
-            raise ValueError(f"Instagram API error: HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+        return self._json_or_raise(ctx.http.post(url, data=urlencode(form).encode(), headers=headers))
 
     def _create_container(self, ctx: IntegrationContext, form: dict) -> str:
         data = self._post_form(ctx, f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/media", form)
@@ -602,3 +764,85 @@ class InstagramProvider(IntegrationProvider):
             "would_post": out["would_publish"],
             "quota": out["quota"],
         }
+
+    # ---- shared engagement (social.comments / social.reply / social.hide / social.delete_comment) -------------------
+    # Marvin's shared auto-reply engine reads and answers through these. They sit on the same Graph calls as the
+    # actions above; Instagram has no way to like a comment, repost, or message someone outside a comment, so it
+    # declares none of social.like / social.repost / social.message.
+
+    def _action_comments(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.comments` capability: the comment polling, plus the replies under each comment, as a cursor feed."""
+        limit = int(args.get("limit") or DEFAULT_LIMIT)
+        if limit < 1:
+            raise ValueError("'limit' must be at least 1.")
+        kinds = args.get("kinds") or [KIND_COMMENT, KIND_REPLY]
+        if unknown := [k for k in kinds if k not in KINDS]:
+            raise _unsupported(f"Unknown comment kind {unknown[0]!r}; use comment, reply or mention.")
+        # Instagram's Graph API reports @mentions in comments only by webhook, never to a poll (verify), so there is
+        # nothing to return for that kind. Asking for nothing else is an error rather than a quiet empty feed.
+        wanted = set(kinds) - {KIND_MENTION}
+        if not wanted:
+            raise _unsupported("Instagram can't list mentions by polling; ask for comment or reply.")
+        since = args.get("since") or None
+        if since:
+            try:
+                decode_cursor(str(since))
+            except ValueError as e:
+                raise IntegrationError(str(e), code="invalid_cursor") from e
+
+        items = [i for row in self._recent_comments(ctx, thread=True) if (i := to_item(row)) and i["kind"] in wanted]
+        page, cursor = page_after(items, str(since) if since else None, limit)
+        return {"items": page, "cursor": cursor}
+
+    def _check_private_window(self, ctx: IntegrationContext, comment_id: str) -> None:
+        """A private reply needs a comment under 7 days old that isn't the account's own: refuse before sending."""
+        comment = self._get_json(ctx, f"{self._base(ctx)}/{comment_id}?fields=id,timestamp,username")
+        ts = _parse_ts(comment.get("timestamp"))
+        if ts and datetime.now(UTC) - ts > timedelta(days=DEFAULT_MAX_AGE_DAYS):
+            raise _unsupported(f"Instagram allows a private reply only within {DEFAULT_MAX_AGE_DAYS} days of the comment; this one is older.")
+        own = str(self._cfg(ctx).get("own_username") or "").lower()
+        if own and str(comment.get("username") or "").lower() == own:
+            raise _unsupported("That comment is from your own account; there is nobody to send a private reply to.")
+
+    def _action_reply(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.reply` capability: a private reply (the DM `send_private_reply` sends) or, with private=false, a
+        public reply under the comment. The approval step before it is the gate, so a real send is the default."""
+        comment_id, text = str(args.get("comment_id") or "").strip(), str(args.get("text") or "").strip()
+        if not comment_id or not text:
+            raise ValueError("reply needs 'comment_id' and 'text'.")
+        private, dry_run = _flag(args.get("private"), True), _flag(args.get("dry_run"), False)
+        if private and not self._cfg(ctx).get("ig_user_id"):
+            raise ValueError("Missing Instagram user ID.")
+        if private:
+            self._check_private_window(ctx, comment_id)
+        result = {"replied": False, "reply_id": None, "private": private, "url": None, "network": NETWORK}
+        if dry_run:
+            return {**result, "dry_run": True, "would_reply": {"comment_id": comment_id, "text": text, "private": private}}
+        if private:
+            data = self._json_or_raise(self._send(ctx, comment_id, text))
+            reply_id = data.get("message_id")
+        else:
+            data = self._post_form(ctx, f"{self._base(ctx)}/{comment_id}/replies", {"message": text})
+            reply_id = data.get("id")
+        return {**result, "replied": True, "reply_id": str(reply_id) if reply_id else None}
+
+    def _action_hide(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.hide` capability: hide a comment under the account's own post, or show it again."""
+        comment_id = str(args.get("comment_id") or "").strip()
+        if not comment_id:
+            raise ValueError("hide needs 'comment_id'.")
+        hidden = _flag(args.get("hidden"), True)
+        data = self._post_form(ctx, f"{self._base(ctx)}/{comment_id}?hide={str(hidden).lower()}", {})
+        if data.get("success") is False:
+            raise ValueError("Instagram did not change the comment's visibility.")
+        return {"hidden": hidden, "network": NETWORK}
+
+    def _action_delete_comment(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.delete_comment` capability: delete a comment under the account's own post (or its own reply)."""
+        comment_id = str(args.get("comment_id") or "").strip()
+        if not comment_id:
+            raise ValueError("delete_comment needs 'comment_id'.")
+        data = self._json_or_raise(ctx.http.delete(f"{self._base(ctx)}/{comment_id}", headers=self._auth(ctx)))
+        if data.get("success") is False:
+            raise ValueError("Instagram did not delete the comment.")
+        return {"deleted": True, "network": NETWORK}
