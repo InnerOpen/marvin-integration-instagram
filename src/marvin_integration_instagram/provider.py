@@ -171,7 +171,7 @@ class InstagramProvider(IntegrationProvider):
                 {"kind": "external_post", "description": "One Instagram feed post per approved run (Instagram allows 25 per 24 hours)."},
                 {
                     "kind": "content_mutation",
-                    "description": "Keeps a JPEG copy of the picture as a derived asset; sets instagram_media_id and instagram_permalink on the entry.",
+                    "description": "Keeps a JPEG copy of the picture as a new asset, and saves the post's link on the entry.",
                 },
             ),
         ),

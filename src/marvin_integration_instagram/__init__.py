@@ -3,4 +3,4 @@
 from .provider import InstagramProvider
 
 __all__ = ["InstagramProvider"]
-__version__ = "0.8.0"
+__version__ = "0.8.1"
