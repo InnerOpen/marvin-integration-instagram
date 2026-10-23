@@ -117,10 +117,10 @@ def test_refresh_token_returns_secret_update():
     assert "access_token=" in http.gets[0]["url"]  # Meta's refresh endpoint takes the token as a parameter, not the header
 
 
-def test_provider_declares_only_the_token_refresh_task():
-    """0.8.0 stops shipping the ig-* entry types, the two Social collections and the auto-reply task."""
+def test_provider_declares_the_token_refresh_task_and_the_webhook():
+    """0.8.0 stops shipping the ig-* entry types, the two Social collections and the auto-reply task; 0.10.0 offers a webhook."""
     content = {c.slug: c for c in InstagramProvider().content}
-    assert set(content) == {"instagram-token-refresh"}
+    assert set(content) == {"instagram-token-refresh", "instagram-webhooks"}
     task = content["instagram-token-refresh"]
     assert task.kind == "scheduled_task" and not task.required and not task.requires
     assert task.payload["task_config"] == {"integration": "instagram", "action": "refresh_token"}

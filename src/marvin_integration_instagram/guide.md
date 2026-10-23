@@ -100,7 +100,12 @@ them. Write the rules again under Social › Instagram › Rules.
   it as `since` in the next (Marvin's Social engine does exactly this). **Hide a comment** needs no approval, so a workflow
   can hide spam after an AI classification; **Reply to a comment** and **Delete a comment** come after an Approval step.
 - Don't call **Refresh access token** from a workflow: the new token would not be stored. Use the scheduled task.
-- The integration emits no events and receives no webhooks. Marvin finds new comments only by polling.
+- The integration emits no events of its own. Marvin finds new comments by polling.
+- For Meta's webhooks (a DM, a comment, a mention as it happens), apply the **Instagram webhooks** incoming webhook this
+  integration offers. It is set to the `meta` verification and signature schemes: mint its token, generate the verify
+  phrase, store the app secret as `INSTAGRAM_APP_SECRET`, then paste the URL and phrase into the Meta app's webhook
+  settings and publish the app. A workflow on that incoming webhook reads the delivery as `${event.payload.entry.0…}` —
+  for a DM, `${event.payload.entry.0.messaging.0.message}`.
 
 ## What it can't do
 
