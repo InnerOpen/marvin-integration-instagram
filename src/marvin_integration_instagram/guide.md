@@ -87,8 +87,8 @@ them. Write the rules again under Social › Instagram › Rules.
 
 ## In workflows
 
-- **Publish a post**, **Post to Instagram**, **Reply to a comment** and
-  **Delete a comment** require approval: a workflow may run them only right
+- **Publish a post**, **Post to Instagram**, **Reply to a comment**, **Delete a comment** and
+  **Send a direct message** require approval: a workflow may run them only right
   after an **Approval** step that was approved (the step refuses otherwise). The usual post: trigger
   `entry_published` → Approval "Post “${entry.title}” to Instagram?" → a `media` step `convert` to `jpeg` with
   `source: ${entry.image}` (the feed takes JPEG only; the copy is kept as a derived asset) → Run integration
@@ -101,11 +101,14 @@ them. Write the rules again under Social › Instagram › Rules.
   can hide spam after an AI classification; **Reply to a comment** and **Delete a comment** come after an Approval step.
 - Don't call **Refresh access token** from a workflow: the new token would not be stored. Use the scheduled task.
 - The integration emits no events of its own. Marvin finds new comments by polling.
+- **Send a direct message** answers someone who messaged the account (their id is the DM's sender id), and only within
+  24 hours of their last message — Meta's rule. The Social inbox uses it to answer DMs, story replies and story mentions.
 - For Meta's webhooks (a DM, a comment, a mention as it happens), apply the **Instagram webhooks** incoming webhook this
   integration offers. It is set to the `meta` verification and signature schemes: mint its token, generate the verify
   phrase, store the **Instagram app secret** (Use cases → Instagram API → API setup with Instagram login; not the
   Facebook app secret under App settings → Basic) as `INSTAGRAM_APP_SECRET`, then paste the URL and phrase into the Meta app's webhook
-  settings and publish the app. A workflow on that incoming webhook reads the delivery as `${event.payload.entry.0…}` —
+  settings and publish the app. Deliveries also reach the **Social inbox** on their own: DMs (with a shared post's
+  caption and picture), story replies and mentions, reactions, comments, live comments and @mentions. A workflow on that incoming webhook reads the delivery as `${event.payload.entry.0…}` —
   for a DM, `${event.payload.entry.0.messaging.0.message}`.
 
 ## What it can't do

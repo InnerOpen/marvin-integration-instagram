@@ -30,6 +30,7 @@ from marvin_integration_sdk import (
 
 from .content import CONTENT
 from .engagement import DEFAULT_LIMIT, KIND_COMMENT, KIND_MENTION, KIND_REPLY, KINDS, NETWORK, decode_cursor, page_after, to_item
+from .webhooks import inbox_items
 
 DEFAULT_API_VERSION = "v22.0"
 DEFAULT_LOOKBACK_MEDIA = 10
@@ -423,6 +424,44 @@ class InstagramProvider(IntegrationProvider):
             cost_hint="free",
             requires_approval=True,
         ),
+        ProviderAction(
+            key="message",
+            label="Send a direct message",
+            description=(
+                "Marvin's shared social message: an Instagram direct message to a person by their Instagram-scoped id — the "
+                "answer to a DM, a story reply or a story mention in the Social inbox. Meta allows it only within 24 hours of the "
+                "person's last message to the account; a handle alone can't be resolved, so it is refused."
+            ),
+            capability="social.message",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "The person's Instagram-scoped id (a DM's sender id)."},
+                            "handle": {"type": "string", "description": "Not enough on its own: Instagram can't resolve a handle to an id."},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "text": {"type": "string"},
+                    "dry_run": {"type": "boolean", "default": False, "description": "Check the message and report it, sending nothing."},
+                },
+                "required": ["to", "text"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "sent": {"type": "boolean"},
+                    "message_id": {"type": ["string", "null"]},
+                    "network": {"type": "string", "const": NETWORK},
+                    "would_send": {"type": "object", "description": "A dry run only: what would be sent."},
+                },
+            },
+            cost_hint="free",
+            requires_approval=True,
+        ),
     )
 
     # ---- plumbing ---------------------------------------------------------------------------
@@ -529,6 +568,7 @@ class InstagramProvider(IntegrationProvider):
             "reply": self._action_reply,
             "hide": self._action_hide,
             "delete_comment": self._action_delete_comment,
+            "message": self._action_message,
         }.get(key)
         if handler is None:
             raise NotImplementedError(f"instagram has no action '{key}'")
@@ -682,8 +722,8 @@ class InstagramProvider(IntegrationProvider):
 
     # ---- shared engagement (social.comments / social.reply / social.hide / social.delete_comment) -------------------
     # Marvin's shared auto-reply engine reads and answers through these. They sit on the same Graph calls as the
-    # actions above; Instagram has no way to like a comment, repost, or message someone outside a comment, so it
-    # declares none of social.like / social.repost / social.message.
+    # actions above; Instagram has no way to like a comment or repost, so it declares neither social.like nor social.repost.
+    # social.message answers someone who messaged the account (within Meta's 24-hour window).
 
     def _action_comments(self, args: dict, ctx: IntegrationContext) -> dict:
         """The `social.comments` capability: the comment polling, plus the replies under each comment, as a cursor feed."""
@@ -740,6 +780,28 @@ class InstagramProvider(IntegrationProvider):
             data = self._post_form(ctx, f"{self._base(ctx)}/{comment_id}/replies", {"message": text})
             reply_id = data.get("id")
         return {**result, "replied": True, "reply_id": str(reply_id) if reply_id else None}
+
+    def _action_message(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.message` capability: a direct message to a person by Instagram-scoped id. Meta allows it only within 24
+        hours of their last message to the account; the plugin can't see that time, so a send outside it fails at Instagram."""
+        to = args.get("to") if isinstance(args.get("to"), dict) else {}
+        igsid, handle = str(to.get("id") or "").strip(), str(to.get("handle") or "").strip()
+        text = str(args.get("text") or "").strip()
+        if not text or not (igsid or handle):
+            raise ValueError("message needs 'to.id' and 'text'.")
+        if not igsid:
+            raise _unsupported("Instagram can message a person only by their Instagram-scoped id (to.id); a handle can't be resolved.")
+        if not self._cfg(ctx).get("ig_user_id"):
+            raise ValueError("Missing Instagram user ID.")
+        if _flag(args.get("dry_run"), False):
+            return {"sent": False, "dry_run": True, "message_id": None, "network": NETWORK, "would_send": {"to": {"id": igsid}, "text": text}}
+        url = f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/messages"
+        data = self._json_or_raise(ctx.http.post(url, json={"recipient": {"id": igsid}, "message": {"text": text}}, headers=self._auth(ctx)))
+        return {"sent": True, "message_id": str(data["message_id"]) if data.get("message_id") else None, "network": NETWORK}
+
+    def inbox_items_from_webhook(self, payload: dict, ctx: IntegrationContext) -> list[dict]:
+        """Meta's webhook deliveries to the Instagram webhooks incoming webhook, as Social inbox items (webhooks.py)."""
+        return inbox_items(payload)
 
     def _action_hide(self, args: dict, ctx: IntegrationContext) -> dict:
         """The `social.hide` capability: hide a comment under the account's own post, or show it again."""

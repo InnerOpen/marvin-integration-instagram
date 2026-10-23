@@ -94,9 +94,10 @@ def test_the_capabilities_are_declared_on_the_new_actions_with_the_right_gates()
         "social.reply": ("reply", True),
         "social.hide": ("hide", False),
         "social.delete_comment": ("delete_comment", True),
+        "social.message": ("message", True),  # 0.11.0: answering a DM (Meta's 24-hour window)
     }
     # Nothing Instagram can't do is claimed.
-    assert not {"social.like", "social.repost", "social.message"} & set(by_cap)
+    assert not {"social.like", "social.repost"} & set(by_cap)
 
 
 def test_the_remaining_actions_and_their_approval():
@@ -337,3 +338,25 @@ def test_every_new_action_needs_the_token():
     ):
         with pytest.raises(ValueError, match="token"):
             _run(key, args, secret=None)
+
+
+# ── social.message (0.11.0): answering a DM ───────────────────────────────────────────────────────────────────────
+
+
+def test_message_sends_a_dm_to_the_instagram_scoped_id():
+    http = _Http()
+
+    out = _run("message", {"to": {"id": "1400000000000002"}, "text": "Thanks!"}, http=http)
+
+    assert out == {"sent": True, "message_id": "mid.1", "network": "instagram"}
+    (sent,) = http.posts
+    assert sent["url"].endswith("/1789/messages") and sent["json"] == {"recipient": {"id": "1400000000000002"}, "message": {"text": "Thanks!"}}
+
+
+def test_message_dry_run_sends_nothing_and_a_handle_alone_is_refused():
+    http = _Http()
+    assert _run("message", {"to": {"id": "p1"}, "text": "Hi", "dry_run": True}, http=http)["would_send"] == {"to": {"id": "p1"}, "text": "Hi"}
+    assert http.posts == []
+    with pytest.raises(IntegrationError) as err:
+        _run("message", {"to": {"handle": "alice"}, "text": "Hi"})
+    assert err.value.code == "unsupported"

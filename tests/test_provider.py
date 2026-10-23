@@ -150,10 +150,10 @@ def test_the_guide_ships_with_the_package():
 def test_the_guide_tells_workflows_the_truth_about_which_actions_they_can_run():
     # The core runs an approval-gated action only right after an approved Approval step; the guide says so and names them.
     needs_approval = {a.key for a in InstagramProvider.actions if a.requires_approval}
-    assert needs_approval == {"publish_media", "post", "reply", "delete_comment"}
+    assert needs_approval == {"publish_media", "post", "reply", "delete_comment", "message"}
     workflows = load_guide(InstagramProvider).split("## In workflows", 1)[1].split("## ", 1)[0]
     assert "Approval" in workflows and all(
-        label in workflows for label in ("Publish a post", "Post to Instagram", "Reply to a comment", "Delete a comment")
+        label in workflows for label in ("Publish a post", "Post to Instagram", "Reply to a comment", "Delete a comment", "Send a direct message")
     )
 
 
