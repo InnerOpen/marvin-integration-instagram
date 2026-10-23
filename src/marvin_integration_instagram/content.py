@@ -18,7 +18,9 @@ TOKEN_REFRESH_TASK = "instagram-token-refresh"
 TOKEN_REFRESH_INTERVAL_SECONDS = 30 * 24 * 3600  # long-lived tokens last 60 days
 
 WEBHOOK_SLUG = "instagram-webhooks"
-APP_SECRET_REF = "INSTAGRAM_APP_SECRET"  # the Meta app's secret (App settings → Basic): it signs every delivery
+# The Instagram app secret (Use cases → Instagram API → API setup with Instagram login) signs every delivery — not the
+# Facebook app secret under App settings → Basic, which an Instagram-login app's webhooks don't use.
+APP_SECRET_REF = "INSTAGRAM_APP_SECRET"
 VERIFY_TOKEN_REF = "INSTAGRAM_WEBHOOK_VERIFY_TOKEN"  # the phrase typed into Meta's webhook settings
 
 CONTENT = (
@@ -43,8 +45,8 @@ CONTENT = (
         name="Instagram webhooks",
         description=(
             "Where Meta sends Instagram's webhooks (a DM, a comment, a mention) for workflows to act on. After applying: mint its "
-            f"token; under Verification, Generate phrase (stored as {VERIFY_TOKEN_REF}); under Signing, store the Meta app's "
-            f"secret as {APP_SECRET_REF}. Then paste the URL and the phrase into the app's Configure webhooks, subscribe to the "
+            f"token; under Verification, Generate phrase (stored as {VERIFY_TOKEN_REF}); under Signing, store the Instagram app secret "
+            f"(API setup with Instagram login, not App settings → Basic) as {APP_SECRET_REF}. Then paste the URL and the phrase into the app's Configure webhooks, subscribe to the "
             "fields you want, and publish the app."
         ),
         payload={
