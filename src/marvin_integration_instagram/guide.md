@@ -108,7 +108,9 @@ them. Write the rules again under Social › Instagram › Rules.
   phrase, store the **Instagram app secret** (Use cases → Instagram API → API setup with Instagram login; not the
   Facebook app secret under App settings → Basic) as `INSTAGRAM_APP_SECRET`, then paste the URL and phrase into the Meta app's webhook
   settings and publish the app. Deliveries also reach the **Social inbox** on their own: DMs (with a shared post's
-  caption and picture), story replies and mentions, reactions, comments, live comments and @mentions. A workflow on that incoming webhook reads the delivery as `${event.payload.entry.0…}` —
+  caption and picture), story replies and mentions, reactions, comments, live comments and @mentions. For a webhook this
+  integration didn't create (a relay, a second app), a workflow's **Run integration** step with **Turn a webhook delivery
+  into inbox items** (`social.inbox_items`, `payload: ${event.payload}`) keeps the delivery in the inbox; sign that webhook. A workflow on that incoming webhook reads the delivery as `${event.payload.entry.0…}` —
   for a DM, `${event.payload.entry.0.messaging.0.message}`.
 
 ## What it can't do

@@ -90,3 +90,16 @@ def test_anything_that_isnt_an_instagram_delivery_gives_nothing():
 
 def test_the_provider_hands_marvin_the_items():
     assert InstagramProvider().inbox_items_from_webhook(_messaging(_event({"mid": "mid.7", "text": "Hi"})), None)[0]["id"] == "mid.7"
+
+
+def test_the_inbox_items_action_turns_a_payload_into_items_and_refuses_anything_else():
+    import logging
+
+    import pytest
+    from marvin_integration_sdk import IntegrationContext
+
+    ctx = IntegrationContext(config={"ig_user_id": "1789"}, secret="tok", logger=logging.getLogger("t"), http=None)
+    out = InstagramProvider().run_action("inbox_items", {"payload": _messaging(_event({"mid": "mid.8", "text": "Hi"}))}, ctx)
+    assert [i["id"] for i in out["items"]] == ["mid.8"]
+    with pytest.raises(TypeError, match="payload"):
+        InstagramProvider().run_action("inbox_items", {"payload": "not an object"}, ctx)

@@ -462,6 +462,27 @@ class InstagramProvider(IntegrationProvider):
             cost_hint="free",
             requires_approval=True,
         ),
+        ProviderAction(
+            key="inbox_items",
+            label="Turn a webhook delivery into inbox items",
+            description=(
+                "Marvin's shared social.inbox_items: Meta's webhook delivery (its body, as a workflow received it) turned into "
+                "Social inbox items — Marvin keeps them in this connection's inbox. For a webhook this integration didn't create; "
+                "its own webhook's deliveries reach the inbox without a step. Reads only the payload: nothing is sent."
+            ),
+            capability="social.inbox_items",
+            input_schema={
+                "type": "object",
+                "properties": {"payload": {"type": "object", "description": "The delivery's body, e.g. ${event.payload}."}},
+                "required": ["payload"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"items": {"type": "array", "description": "Inbox items in Marvin's shared shape."}},
+            },
+            cost_hint="free",
+        ),
     )
 
     # ---- plumbing ---------------------------------------------------------------------------
@@ -569,6 +590,7 @@ class InstagramProvider(IntegrationProvider):
             "hide": self._action_hide,
             "delete_comment": self._action_delete_comment,
             "message": self._action_message,
+            "inbox_items": self._action_inbox_items,
         }.get(key)
         if handler is None:
             raise NotImplementedError(f"instagram has no action '{key}'")
@@ -798,6 +820,13 @@ class InstagramProvider(IntegrationProvider):
         url = f"{self._base(ctx)}/{self._cfg(ctx).get('ig_user_id')}/messages"
         data = self._json_or_raise(ctx.http.post(url, json={"recipient": {"id": igsid}, "message": {"text": text}}, headers=self._auth(ctx)))
         return {"sent": True, "message_id": str(data["message_id"]) if data.get("message_id") else None, "network": NETWORK}
+
+    def _action_inbox_items(self, args: dict, ctx: IntegrationContext) -> dict:
+        """The `social.inbox_items` capability: a webhook delivery's inbox items (webhooks.py) — Marvin keeps them."""
+        payload = args.get("payload")
+        if not isinstance(payload, dict):
+            raise TypeError("inbox_items needs 'payload': the webhook delivery's body (an object).")
+        return {"items": inbox_items(payload), "network": NETWORK}
 
     def inbox_items_from_webhook(self, payload: dict, ctx: IntegrationContext) -> list[dict]:
         """Meta's webhook deliveries to the Instagram webhooks incoming webhook, as Social inbox items (webhooks.py)."""

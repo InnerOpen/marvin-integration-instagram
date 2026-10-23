@@ -95,6 +95,7 @@ def test_the_capabilities_are_declared_on_the_new_actions_with_the_right_gates()
         "social.hide": ("hide", False),
         "social.delete_comment": ("delete_comment", True),
         "social.message": ("message", True),  # 0.11.0: answering a DM (Meta's 24-hour window)
+        "social.inbox_items": ("inbox_items", False),  # 0.12.0: reads a webhook payload, sends nothing
     }
     # Nothing Instagram can't do is claimed.
     assert not {"social.like", "social.repost"} & set(by_cap)
