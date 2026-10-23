@@ -92,6 +92,25 @@ class InstagramProvider(IntegrationProvider):
     description = "Post to Instagram, and read, reply to (privately or publicly), hide and delete the comments on your posts. Keyword auto-replies are Social's, in Marvin."
     category = CATEGORY_DESTINATION
     icon = "📸"
+    # Meta's webhooks, for an incoming webhook in Marvin: it checks the URL with a GET (hub.mode / hub.challenge /
+    # hub.verify_token — the WebSub handshake) before it delivers, then signs each delivery with the app secret.
+    verification_schemes: ClassVar[dict[str, dict]] = {
+        "meta": {
+            "challenge_param": "hub.challenge",
+            "token_param": "hub.verify_token",
+            "mode_param": "hub.mode",
+            "mode_values": ["subscribe"],
+            "notes": "Meta (Instagram, Facebook, WhatsApp): the verify token you type into the app's webhook settings",
+        }
+    }
+    signature_schemes: ClassVar[dict[str, dict]] = {
+        "meta": {
+            "header": "X-Hub-Signature-256",
+            "prefix": "sha256=",
+            "notes": "Meta: sha256=<hex> of the body, keyed with the app secret (App settings → Basic)",
+            "sender_issues_key": True,
+        }
+    }
     logo = "logo.png"
 
     # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here, and one
