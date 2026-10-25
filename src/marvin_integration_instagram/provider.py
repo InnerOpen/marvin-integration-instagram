@@ -115,6 +115,8 @@ class InstagramProvider(IntegrationProvider):
         }
     }
     logo = "logo.png"
+    post_limits: ClassVar[dict] = {"max": CAPTION_MAX, "unit": "characters", "visible": 125, "hashtags_max": 30, "links": "not_clickable"}
+    """A caption: 2,200 characters, about 125 shown before "… more", at most 30 hashtags, and a link in it isn't clickable."""
 
     # What Marvin learns about Instagram (SDK 0.9.0): a how-to its agents read when building workflows here, and one
     # ready-made workflow in the Workflow Library, offered once Instagram is connected: post the main picture on publish,
